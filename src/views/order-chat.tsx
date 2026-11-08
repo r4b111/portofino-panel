@@ -14,6 +14,7 @@ const chatScript = String.raw`
   const submit = form.querySelector('button');
   const access = root.querySelector('[data-tracking-form]');
   const customerChat = embedded || Boolean(access);
+  const breakdown = root.querySelector('[data-shipping-breakdown]');
   const labels = {
     pending_confirmation: 'Pendiente de confirmación', confirmed: 'Confirmado',
     packing: 'En preparación', shipped: 'Enviado', delivered: 'Entregado',
@@ -36,6 +37,34 @@ const chatScript = String.raw`
       cursor = message.seq;
     }
     pending.delete(message.id);
+  }
+
+  async function showShipping(current, orderVersion) {
+    try {
+      const response = await fetch('/orders/tracking', { headers: { 'X-Tracking-Token': trackingToken } });
+      if (!response.ok) return;
+      const { order } = await response.json();
+      if (current !== generation || orderVersion !== version) return;
+      const money = new Intl.NumberFormat('es-CO', {
+        style: 'currency', currency: order.currency, maximumFractionDigits: 0,
+      });
+      const quote = order.shippingCost !== null && order.totalAmount !== null;
+      const fields = {
+        subtotal: money.format(order.subtotalAmount),
+        cost: quote ? money.format(order.shippingCost) : 'Por confirmar',
+        total: quote ? money.format(order.totalAmount) : 'Por confirmar',
+        carrier: order.carrier ?? 'Por confirmar',
+        eta: order.shippingEtaDays === null ? 'Por confirmar'
+          : order.shippingEtaDays === 0 ? 'El mismo día'
+          : order.shippingEtaDays + (order.shippingEtaDays === 1 ? ' día' : ' días'),
+      };
+      for (const [name, value] of Object.entries(fields)) {
+        breakdown.querySelector('[data-quote="' + name + '"]').textContent = value;
+      }
+      breakdown.hidden = false;
+    } catch {
+      // The next status update or reconnect will retry.
+    }
   }
 
   function connect(current) {
@@ -80,6 +109,7 @@ const chatScript = String.raw`
             if (frame.version >= version) {
               version = frame.version;
               state.textContent = labels[frame.status] || 'Estado actualizado';
+              if (breakdown) void showShipping(current, frame.version);
             }
             break;
           case 'ready':
@@ -161,6 +191,7 @@ const chatScript = String.raw`
     customerDraft = undefined;
     feed.replaceChildren();
     state.textContent = 'Por consultar';
+    if (breakdown) breakdown.hidden = true;
     connect(generation);
   }
 
@@ -211,6 +242,15 @@ export function OrderChat({ ticketUrl, customer = false, embedded = false }: {
       <button type="submit">Abrir conversación</button>
     </form>}
     <p>Estado en vivo <strong data-live-status="">Por consultar</strong></p>
+    {embedded && <section data-shipping-breakdown="" aria-label="Desglose del pedido" aria-live="polite" hidden>
+      <dl>
+        <dt>Subtotal</dt><dd data-quote="subtotal"></dd>
+        <dt>Envío</dt><dd data-quote="cost"></dd>
+        <dt>Total</dt><dd data-quote="total"></dd>
+        <dt>Transportadora</dt><dd data-quote="carrier"></dd>
+        <dt>Entrega estimada</dt><dd data-quote="eta"></dd>
+      </dl>
+    </section>}
     <p role="status" data-connection="">{customer ? 'Ingresa tu código para consultar el pedido.' : 'Conectando…'}</p>
     <ol data-messages="" aria-live="polite" aria-label="Mensajes"></ol>
     <p role="status" data-chat-notice=""></p>
@@ -226,6 +266,9 @@ const embeddedStyle = `
   body { margin: 0; padding: 1rem; color: #19362c; background: #fff; font: 1rem system-ui, sans-serif; }
   h2 { margin: 0; font-size: 1.2rem; }
   ol { max-height: 18rem; overflow: auto; overflow-wrap: anywhere; }
+  dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .35rem .6rem;
+    background: #f2f7f4; padding: .75rem; border-radius: .5rem; }
+  dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   input { box-sizing: border-box; display: block; width: 100%; padding: .45rem; font: inherit; }
   button { margin-top: .6rem; padding: .5rem .8rem; color: white; background: #145741;
     border: 0; border-radius: .5rem; font: inherit; }

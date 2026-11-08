@@ -99,6 +99,12 @@ Carga el script clásico del Worker en la página privada del pedido y asigna al
 Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Worker en `script-src` y `frame-src`. Al abrir la conversación tras recargar, el widget recupera el estado y el historial del pedido. Si se interrumpe la conexión, reintenta con pausas crecientes de hasta 30 segundos. Si se alcanza el límite de envío, muestra un aviso y conserva el borrador.
 
 
+## Confirmar envío
+
+Un agente autenticado puede enviar `PATCH /admin/orders/:number/shipping` con `{ "carrier": "Inter Rapidísimo", "shippingCost": 12000, "shippingEtaDays": 3 }`. El costo debe expresarse en unidades enteras de la moneda del pedido. Se admite costo cero para envío gratis. El pedido debe estar pendiente de confirmación.
+
+El servidor suma el costo al subtotal guardado y confirma el pedido en el mismo batch que registra el cambio en auditoría. El widget muestra subtotal, envío, total, transportadora y plazo estimado. Antes de confirmar la cotización, el costo y el total aparecen como «Por confirmar».
+
 ## Retención de pedidos
 
 Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.

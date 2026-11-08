@@ -30,8 +30,14 @@ async function trackingCondition(token: string) {
   );
 }
 
+const amountFields = {
+  subtotalAmount: orders.subtotalAmount,
+  shippingCost: orders.shippingCost,
+  totalAmount: orders.totalAmount,
+};
+
 export async function findTrackingOrder(database: D1Database, token: string) {
-  const [order] = await drizzle(database).select(trackingFields).from(orders)
+  const [order] = await drizzle(database).select({ ...trackingFields, ...amountFields }).from(orders)
     .where(await trackingCondition(token)).limit(1);
   return order;
 }
@@ -53,29 +59,47 @@ export async function findRealtimeOrder(database: D1Database, token: string) {
 export async function findAdminOrder(database: D1Database, number: number) {
   const [order] = await drizzle(database).select({
     ...trackingFields,
-    subtotalAmount: orders.subtotalAmount,
-    shippingCost: orders.shippingCost,
-    totalAmount: orders.totalAmount,
+    ...amountFields,
     version: orders.version,
   }).from(orders).where(eq(orders.number, number)).limit(1);
   return order;
 }
 
-export async function transitionOrder(
+type ShippingQuote = {
+  carrier: string;
+  shippingCost: number;
+  shippingEtaDays: number;
+};
+
+export function transitionOrder(
   env: AppEnv['Bindings'], identifier: number | string, to: OrderStatus, adminId: string,
   expectedVersion: number,
 ) {
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
     throw new HttpError(400, 'invalid_version', 'Se requiere una versión válida del pedido');
   }
+  return applyOrderTransition(env, identifier, to, adminId, expectedVersion);
+}
+
+export function confirmOrderShipping(
+  env: AppEnv['Bindings'], number: number, adminId: string, shipping: ShippingQuote,
+) {
+  return applyOrderTransition(env, number, 'confirmed', adminId, undefined, shipping);
+}
+
+async function applyOrderTransition(
+  env: AppEnv['Bindings'], identifier: number | string, to: OrderStatus, adminId: string,
+  expectedVersion?: number, shipping?: ShippingQuote,
+) {
   const database = env.DB;
   const [current] = await drizzle(database).select({
     id: orders.id, number: orders.number, status: orders.status, version: orders.version,
+    subtotalAmount: orders.subtotalAmount, currency: orders.currency,
   }).from(orders).where(typeof identifier === 'number'
     ? eq(orders.number, identifier)
     : eq(orders.id, identifier)).limit(1);
   if (!current) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
-  if (expectedVersion !== current.version) {
+  if (expectedVersion !== undefined && expectedVersion !== current.version) {
     throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
   }
   if (!allowedTransitions[current.status].includes(to)) {
@@ -83,12 +107,25 @@ export async function transitionOrder(
   }
 
   const now = Date.now();
+  const totalAmount = shipping ? current.subtotalAmount + shipping.shippingCost : null;
+  if (totalAmount !== null && !Number.isSafeInteger(totalAmount)) {
+    throw new HttpError(400, 'invalid_total', 'El total excede el importe permitido');
+  }
+  const update = shipping
+    ? database.prepare(`
+        UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
+          expires_at = NULL, carrier = ?, shipping_cost = ?, shipping_eta_days = ?, total_amount = subtotal_amount + ?
+        WHERE id = ? AND version = ? AND status = ? AND subtotal_amount = ?
+          AND anonymized_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+      `).bind(to, now, shipping.carrier, shipping.shippingCost, shipping.shippingEtaDays,
+        shipping.shippingCost, current.id, current.version, current.status, current.subtotalAmount, now)
+    : database.prepare(`
+        UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
+          expires_at = CASE WHEN ? = 'confirmed' THEN NULL ELSE expires_at END
+        WHERE id = ? AND version = ? AND status = ?
+      `).bind(to, now, to, current.id, current.version, current.status);
   const [updated] = await database.batch([
-    database.prepare(`
-      UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
-        expires_at = CASE WHEN ? = 'confirmed' THEN NULL ELSE expires_at END
-      WHERE id = ? AND version = ? AND status = ?
-    `).bind(to, now, to, current.id, expectedVersion, current.status),
+    update,
     // The prior UPDATE and audit INSERT share the D1 transaction and connection.
     database.prepare(`
       INSERT INTO audit_log (id, admin_id, action, entity, entity_id, from_status, to_status, created_at)
@@ -105,7 +142,10 @@ export async function transitionOrder(
     // D1 already committed. Reconnecting clients receive its authoritative state.
     console.error('No se pudo difundir un cambio de estado de pedido');
   }
-  return { number: current.number, ...state, updatedAt: now };
+  return {
+    number: current.number, ...state, updatedAt: now,
+    ...(shipping && { ...shipping, currency: current.currency, subtotalAmount: current.subtotalAmount, totalAmount }),
+  };
 }
 
 export const panelPageSize = 50;

@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import type { AppEnv } from '../lib/http';
 import { hashPassword } from '../lib/passwords';
+import { generateTrackingToken, hashTrackingToken } from '../lib/tokens';
 
 const bindings = env as AppEnv['Bindings'] & { TEST_MIGRATIONS: D1Migration[] };
 const testBindings = { ...bindings, ADMIN_SESSION_SECRET: 'firma exclusiva de prueba de más de 32 caracteres' };
@@ -108,6 +109,53 @@ describe('autenticación y transiciones administrativas', () => {
     expect((await changeStatus('packing', credential, 1)).status).toBe(409);
     expect(await db.prepare('SELECT COUNT(*) AS total FROM audit_log').first('total')).toBe(1);
     expect(await db.prepare('SELECT version FROM orders').first('version')).toBe(2);
+  });
+
+  it('exige costo de envío y revierte el total y el estado si falla la auditoría', async () => {
+    const { credential } = await login('agent');
+    const quote = { carrier: 'Transportadora', shippingCost: 0, shippingEtaDays: 2 };
+    const fixShipping = (body: unknown, cookie?: string) =>
+      jsonRequest('/admin/orders/1/shipping', 'PATCH', body, cookie);
+    const shippingState = () => db.prepare(`
+      SELECT status, version, carrier, shipping_cost, shipping_eta_days, total_amount FROM orders
+    `).first();
+    const token = generateTrackingToken();
+    await db.prepare('UPDATE orders SET subtotal_amount = 20000, tracking_token_hash = ?, expires_at = ?')
+      .bind(await hashTrackingToken(token), Date.now() + 60_000).run();
+    const pending = await shippingState();
+
+    expect((await fixShipping(quote)).status).toBe(401);
+    expect((await fixShipping({ carrier: quote.carrier, shippingEtaDays: 2 }, credential)).status).toBe(400);
+    expect((await fixShipping({ ...quote, totalAmount: 1 }, credential)).status).toBe(400);
+    await expect(db.prepare('UPDATE orders SET total_amount = 1').run()).rejects.toThrow('shipping_cost required');
+    expect(await shippingState()).toEqual(pending);
+
+    await db.prepare(`
+      CREATE TRIGGER reject_shipping_audit BEFORE INSERT ON audit_log
+      BEGIN SELECT RAISE(ABORT, 'fallo de prueba'); END
+    `).run();
+    try {
+      expect((await fixShipping(quote, credential)).status).toBe(500);
+      expect(await shippingState()).toEqual(pending);
+    } finally {
+      await db.prepare('DROP TRIGGER reject_shipping_audit').run();
+    }
+
+    const responses = await Promise.all([fixShipping(quote, credential), fixShipping(quote, credential)]);
+    expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
+    expect(await shippingState()).toEqual({
+      status: 'confirmed', version: 2, carrier: 'Transportadora', shipping_cost: 0,
+      shipping_eta_days: 2, total_amount: 20000,
+    });
+    expect(await db.prepare('SELECT expires_at FROM orders').first('expires_at')).toBeNull();
+    const tracking = await app.request('/orders/tracking', {
+      headers: { 'X-Tracking-Token': token },
+    }, testBindings);
+    expect(await tracking.json()).toMatchObject({
+      order: { subtotalAmount: 20000, shippingCost: 0, totalAmount: 20000 },
+    });
+    expect(await db.prepare('SELECT admin_id, from_status, to_status FROM audit_log').all())
+      .toMatchObject({ results: [{ admin_id: 'agent', from_status: 'pending_confirmation', to_status: 'confirmed' }] });
   });
 
   it('rechaza contraseña incorrecta y cookie alterada', async () => {
