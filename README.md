@@ -48,3 +48,11 @@ Cada pedido tiene un Durable Object con almacenamiento SQLite. En local, Wrangle
 El cliente solicita un ticket con `POST /api/orders/realtime-token` y `X-Tracking-Token`. El panel usa `POST /api/pedidos/:id/realtime-token` con su cookie. El ticket dura hasta cinco minutos, se consume una vez y se limita por el vencimiento del acceso al pedido o de la sesión. Se pasa a `GET /api/orders/:id/realtime?after=0` mediante los subprotocolos `portofino.v1` y `ticket.<token>`. El servidor negocia `portofino.v1`.
 
 Para enviar texto, usa `{ "type": "message", "id": "<UUID>", "body": "..." }`. Un reintento usa el mismo UUID. El servidor confirma duplicados con `ack` y difunde cada mensaje nuevo una sola vez. Las conexiones nuevas reciben `status`, el historial posterior a `after` y luego `ready`. El navegador conserva el cursor mientras la página está abierta y reconstruye el historial al recargarla. D1 conserva la versión de estado de referencia, que se consulta al reconectar.
+
+## Telegram
+
+Aplica la migración `0003_telegram.sql` y configura `TELEGRAM_BOT_TOKEN` y `TELEGRAM_WEBHOOK_SECRET` como secretos del Worker. Registra `https://<worker>/webhooks/telegram` mediante `setWebhook` de la API de Telegram, usando el mismo valor en `secret_token` y suscribiendo el tipo de actualización `message`.
+
+El cliente vincula su pedido en un chat privado con el bot mediante `/start <token-de-seguimiento>`. Cada chat o tema queda asociado a un solo pedido. Los mensajes de texto recibidos aparecen en la conversación del panel. Las respuestas escritas por un agente en el panel se envían a Telegram cuando hay un chat vinculado y el bot está configurado.
+
+La cola persiste en el Durable Object del pedido. Tras el intento inicial, reintenta a los 1, 2 y 4 segundos. Telegram no ofrece una clave de idempotencia para `sendMessage`. Si acepta un envío y se pierde la respuesta antes de que el Worker registre su ID, un reintento podría generar una segunda entrega.

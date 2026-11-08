@@ -14,6 +14,8 @@ export interface AppEnv {
     ORDER_ROOMS: DurableObjectNamespace<OrderRoom>;
     DATA_SECRET?: string;
     ADMIN_SESSION_SECRET?: string;
+    TELEGRAM_WEBHOOK_SECRET?: string;
+    TELEGRAM_BOT_TOKEN?: string;
   };
   Variables: {
     agent: { id: string; role: 'owner' | 'agent'; expiresAt: number };

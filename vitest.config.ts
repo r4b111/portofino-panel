@@ -4,7 +4,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [cloudflareTest({
     wrangler: { configPath: './wrangler.toml' },
-    miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations('./migrations') } },
+    miniflare: { bindings: {
+      TEST_MIGRATIONS: await readD1Migrations('./migrations'),
+      TELEGRAM_BOT_TOKEN: '123:fake-token',
+    } },
   })],
   test: {
     include: ['src/**/*.test.ts'],

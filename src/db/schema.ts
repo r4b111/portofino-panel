@@ -95,3 +95,28 @@ export const auditLog = sqliteTable('audit_log', {
 }, (table) => [
   index('audit_log_entity_created_idx').on(table.entity, table.entityId, table.createdAt),
 ]);
+
+export const conversations = sqliteTable('conversations', {
+  id: text('id').primaryKey().notNull(),
+  orderId: text('order_id').notNull().unique().references(() => orders.id, { onDelete: 'cascade' }),
+  telegramChatId: text('telegram_chat_id').notNull(),
+  telegramThreadId: integer('telegram_thread_id'),
+}, (table) => [
+  uniqueIndex('conversations_telegram_uq').on(table.telegramChatId, sql`COALESCE(${table.telegramThreadId}, 0)`),
+]);
+
+export const messages = sqliteTable('messages', {
+  id: text('id').primaryKey().notNull(),
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  channel: text('channel', { enum: ['web', 'telegram'] }).notNull(),
+  direction: text('direction', { enum: ['in', 'out'] }).notNull(),
+  telegramChatId: text('telegram_chat_id'),
+  externalId: text('external_id'),
+  body: text('body').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('messages_telegram_external_uq').on(table.telegramChatId, table.externalId),
+  index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+  check('messages_channel_check', sql`${table.channel} IN ('web', 'telegram')`),
+  check('messages_direction_check', sql`${table.direction} IN ('in', 'out')`),
+]);

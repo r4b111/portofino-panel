@@ -2,10 +2,13 @@ import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 import type { AppEnv } from '../lib/http';
 import type { OrderStatus } from '../lib/orders/state';
+import { activeTelegramConversation, sendTelegramMessage, storeTelegramMessage } from '../lib/telegram';
+import type { TelegramMessage } from '../lib/telegram';
 import { generateTrackingToken, hashTrackingToken } from '../lib/tokens';
 
 export const roomProtocol = 'portofino.v1';
 export const trackingTokenFormat = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const telegramRetryDelays = [1000, 2000, 4000] as const;
 const lifetimeMs = 5 * 60 * 1000;
 const messageSchema = z.object({
   type: z.literal('message'),
@@ -24,7 +27,7 @@ type Connection = {
   expiresAt: number;
 }
 
-type Ticket = Connection & {
+type RoomConnection = Connection & {
   orderId: string;
 };
 
@@ -34,6 +37,12 @@ type MessageRow = {
   role: Connection['role'];
   body: string;
   createdAt: number;
+};
+
+type TelegramJob = TelegramMessage & {
+  orderId: string;
+  attempts: number;
+  externalId: string | null;
 };
 
 export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
@@ -49,6 +58,11 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
         role TEXT NOT NULL, body TEXT NOT NULL, createdAt INTEGER NOT NULL,
         UNIQUE (actorId, id)
       );
+      CREATE TABLE IF NOT EXISTS telegram_outbox (
+        id TEXT PRIMARY KEY, orderId TEXT NOT NULL, body TEXT NOT NULL, createdAt INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, dueAt INTEGER, externalId TEXT
+      );
+      CREATE INDEX IF NOT EXISTS telegram_outbox_due ON telegram_outbox (dueAt);
       CREATE TABLE IF NOT EXISTS room_state (
         id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL, version INTEGER NOT NULL
       );
@@ -81,7 +95,7 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
     }
 
     const hash = await hashTrackingToken(token.data);
-    const [ticket] = this.ctx.storage.sql.exec<Ticket>(
+    const [ticket] = this.ctx.storage.sql.exec<RoomConnection>(
       'DELETE FROM tickets WHERE hash = ? AND expiresAt > ? RETURNING orderId, role, actorId, expiresAt',
       hash, Date.now(),
     ).toArray();
@@ -96,9 +110,7 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
 
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({
-      role: ticket.role, actorId: ticket.actorId, expiresAt: ticket.expiresAt,
-    } satisfies Connection);
+    server.serializeAttachment(ticket satisfies RoomConnection);
     const latest = this.ctx.storage.sql.exec<RoomState>('SELECT status, version FROM room_state').one();
     this.send(server, { type: 'status', ...latest });
     let cursor = Number(after);
@@ -128,8 +140,8 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
     if (changed.length) this.broadcast({ type: 'status', ...state });
   }
 
-  webSocketMessage(socket: WebSocket, frame: string | ArrayBuffer) {
-    const connection = socket.deserializeAttachment() as Connection;
+  async webSocketMessage(socket: WebSocket, frame: string | ArrayBuffer) {
+    const connection = socket.deserializeAttachment() as RoomConnection;
     if (connection.expiresAt <= Date.now()) {
       socket.close(4001, 'Sesión vencida');
       return;
@@ -145,17 +157,104 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
     }
 
     const { id, body } = message.data;
-    const [created] = this.ctx.storage.sql.exec<MessageRow>(
-      `INSERT INTO messages (id, actorId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(actorId, id) DO NOTHING RETURNING seq, id, role, body, createdAt`,
-      id, connection.actorId, connection.role, body, Date.now(),
-    ).toArray();
+    const createdAt = Date.now();
+    // Attachments created before Telegram was added have no orderId.
+    const conversation = connection.role === 'agent' && connection.orderId && this.env.TELEGRAM_BOT_TOKEN
+      ? await activeTelegramConversation(this.env.DB, { orderId: connection.orderId })
+      : null;
+    if (connection.expiresAt <= Date.now()) {
+      socket.close(4001, 'Sesión vencida');
+      return;
+    }
+    const created = conversation
+      ? await this.ctx.blockConcurrencyWhile(async () => {
+        await this.scheduleTelegramAlarm(createdAt);
+        return this.ctx.storage.transactionSync(() => {
+          const row = this.appendMessage({ id, body, createdAt }, connection.actorId, connection.role);
+          if (row) {
+            this.ctx.storage.sql.exec(
+              'INSERT INTO telegram_outbox (id, orderId, body, createdAt, dueAt) VALUES (?, ?, ?, ?, ?)',
+              crypto.randomUUID(), conversation.orderId, body, createdAt, createdAt,
+            );
+          }
+          return row;
+        });
+      })
+      : this.appendMessage({ id, body, createdAt }, connection.actorId, connection.role);
     if (created) {
       this.broadcast({ type: 'message', message: created });
       return;
     }
-
     this.send(socket, { type: 'ack', id });
+  }
+
+  publishTelegramMessage(message: TelegramMessage) {
+    const created = this.appendMessage(message, 'telegram', 'customer');
+    if (created) this.broadcast({ type: 'message', message: created });
+  }
+
+  private appendMessage(message: TelegramMessage, actorId: string, role: Connection['role']) {
+    const [created] = this.ctx.storage.sql.exec<MessageRow>(
+      `INSERT INTO messages (id, actorId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(actorId, id) DO NOTHING RETURNING seq, id, role, body, createdAt`,
+      message.id, actorId, role, message.body, message.createdAt,
+    ).toArray();
+    return created;
+  }
+
+  override async alarm() {
+    const storage = this.ctx.storage;
+    const [job] = storage.sql.exec<TelegramJob>(
+      'SELECT id, orderId, body, createdAt, attempts, externalId FROM telegram_outbox WHERE dueAt <= ? ORDER BY dueAt LIMIT 1',
+      Date.now(),
+    ).toArray();
+    if (job) {
+      const leaseUntil = Date.now() + 60_000;
+      await storage.setAlarm(leaseUntil);
+      storage.sql.exec('UPDATE telegram_outbox SET dueAt = ? WHERE id = ?', leaseUntil, job.id);
+      await this.deliverTelegramJob(job);
+    }
+    const { dueAt } = storage.sql.exec<{ dueAt: number | null }>(
+      'SELECT MIN(dueAt) AS dueAt FROM telegram_outbox',
+    ).one();
+    if (dueAt !== null) await storage.setAlarm(dueAt);
+  }
+
+  private async deliverTelegramJob(job: TelegramJob) {
+    const { DB, TELEGRAM_BOT_TOKEN } = this.env;
+    const sql = this.ctx.storage.sql;
+    const conversation = await activeTelegramConversation(DB, { orderId: job.orderId });
+    if (!conversation) {
+      sql.exec('DELETE FROM telegram_outbox WHERE id = ?', job.id);
+      return;
+    }
+
+    let externalId = job.externalId;
+    if (!externalId) {
+      if (job.attempts > telegramRetryDelays.length) {
+        sql.exec('UPDATE telegram_outbox SET dueAt = NULL WHERE id = ?', job.id);
+        return;
+      }
+      const retryDelay = telegramRetryDelays[job.attempts];
+      sql.exec('UPDATE telegram_outbox SET attempts = attempts + 1 WHERE id = ?', job.id);
+      try {
+        if (!TELEGRAM_BOT_TOKEN) throw new Error('Telegram sin configurar');
+        externalId = await sendTelegramMessage(TELEGRAM_BOT_TOKEN, conversation, job.body);
+      } catch {
+        const dueAt = retryDelay === undefined ? null : Date.now() + retryDelay;
+        sql.exec('UPDATE telegram_outbox SET dueAt = ? WHERE id = ?', dueAt, job.id);
+        return;
+      }
+      // Persist the Telegram ID before writing to D1 so a D1 failure cannot resend the reply.
+      sql.exec('UPDATE telegram_outbox SET externalId = ? WHERE id = ?', externalId, job.id);
+    }
+    await storeTelegramMessage(DB, conversation, externalId, 'out', job);
+    sql.exec('DELETE FROM telegram_outbox WHERE id = ?', job.id);
+  }
+
+  private async scheduleTelegramAlarm(dueAt: number) {
+    const scheduled = await this.ctx.storage.getAlarm();
+    if (scheduled === null || scheduled > dueAt) await this.ctx.storage.setAlarm(dueAt);
   }
 
   webSocketClose(socket: WebSocket) {
