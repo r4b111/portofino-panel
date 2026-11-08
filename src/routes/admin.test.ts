@@ -143,6 +143,7 @@ describe('autenticación y transiciones administrativas', () => {
 
     const responses = await Promise.all([fixShipping(quote, credential), fixShipping(quote, credential)]);
     expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe('cod_pending');
     expect(await shippingState()).toEqual({
       status: 'confirmed', version: 2, carrier: 'Transportadora', shipping_cost: 0,
       shipping_eta_days: 2, total_amount: 20000,
@@ -156,6 +157,66 @@ describe('autenticación y transiciones administrativas', () => {
     });
     expect(await db.prepare('SELECT admin_id, from_status, to_status FROM audit_log').all())
       .toMatchObject({ results: [{ admin_id: 'agent', from_status: 'pending_confirmation', to_status: 'confirmed' }] });
+  });
+
+  it('registra el cobro contra entrega y bloquea entregar un pedido impago', async () => {
+    const agent = await login('agent');
+    const current = () => db.prepare('SELECT status, payment_status, version FROM orders').first();
+    const events = () => db.prepare(`
+      SELECT seq, type, payload FROM order_events ORDER BY seq
+    `).all();
+    const delivery = (version: number) => changeStatus('delivered', agent.credential, version);
+
+    await db.prepare("UPDATE orders SET status = 'shipped'").run();
+    const blocked = await delivery(1);
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ error: { code: 'unpaid_delivery' } });
+    expect(await current()).toEqual({ status: 'shipped', payment_status: 'unpaid', version: 1 });
+
+    await db.prepare("UPDATE orders SET status = 'pending_confirmation'").run();
+    expect((await changeStatus('confirmed', agent.credential)).status).toBe(200);
+    expect(await current()).toEqual({ status: 'confirmed', payment_status: 'cod_pending', version: 2 });
+    expect((await changeStatus('packing', agent.credential, 2)).status).toBe(200);
+    expect((await changeStatus('shipped', agent.credential, 3)).status).toBe(200);
+
+    await db.prepare(`
+      CREATE TRIGGER reject_payment_event BEFORE INSERT ON order_events
+      BEGIN SELECT RAISE(ABORT, 'fallo de prueba'); END
+    `).run();
+    try {
+      expect((await delivery(4)).status).toBe(500);
+      expect(await current()).toEqual({ status: 'shipped', payment_status: 'cod_pending', version: 4 });
+      expect(await db.prepare("SELECT COUNT(*) AS total FROM audit_log WHERE to_status = 'delivered'")
+        .first('total')).toBe(0);
+    } finally {
+      await db.prepare('DROP TRIGGER reject_payment_event').run();
+    }
+
+    expect((await delivery(4)).status).toBe(200);
+    expect(await current()).toEqual({ status: 'delivered', payment_status: 'cod_collected', version: 5 });
+    expect((await events()).results).toEqual([
+      { seq: 1, type: 'payment_changed', payload: '{"from":"unpaid","to":"cod_pending"}' },
+      { seq: 2, type: 'payment_changed', payload: '{"from":"cod_pending","to":"cod_collected"}' },
+    ]);
+  });
+
+  it.each(['paid', 'cod_collected'])('solo permite al owner reembolsar desde %s', async (previous) => {
+    const agent = await login('agent');
+    const owner = await login('owner');
+    const refund = (cookie: string) => jsonRequest('/admin/orders/1/payment', 'PATCH', {
+      paymentStatus: 'refunded',
+    }, cookie);
+
+    expect((await refund(owner.credential)).status).toBe(409);
+    await db.prepare('UPDATE orders SET payment_status = ?').bind(previous).run();
+    expect((await refund(agent.credential)).status).toBe(403);
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe(previous);
+    const responses = await Promise.all([refund(owner.credential), refund(owner.credential)]);
+    expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe('refunded');
+    expect((await db.prepare('SELECT actor_id, type, payload FROM order_events').all()).results).toEqual([
+      { actor_id: 'owner', type: 'payment_changed', payload: JSON.stringify({ from: previous, to: 'refunded' }) },
+    ]);
   });
 
   it('rechaza contraseña incorrecta y cookie alterada', async () => {

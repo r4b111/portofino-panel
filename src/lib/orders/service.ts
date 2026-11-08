@@ -5,7 +5,7 @@ import { encrypt } from '../crypto';
 import { HttpError } from '../errors';
 import type { AppEnv } from '../http';
 import { allowedTransitions } from './state';
-import type { OrderStatus } from './state';
+import type { OrderStatus, PaymentStatus } from './state';
 
 import { generateTrackingToken, hashTrackingToken } from '../tokens';
 
@@ -87,6 +87,54 @@ export function confirmOrderShipping(
   return applyOrderTransition(env, number, 'confirmed', adminId, undefined, shipping);
 }
 
+function paymentChanged(
+  database: D1Database, orderId: string, actorId: string, from: PaymentStatus, to: PaymentStatus, now: number,
+) {
+  return database.prepare(`
+    INSERT INTO order_events (id, order_id, seq, actor_type, actor_id, type, payload, created_at)
+    SELECT ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM order_events WHERE order_id = ?),
+      'agent', ?, 'payment_changed', ?, ?
+    WHERE changes() = 1
+  `).bind(crypto.randomUUID(), orderId, orderId, actorId, JSON.stringify({ from, to }), now);
+}
+
+async function publishOrderState(
+  env: AppEnv['Bindings'], id: string, state: { status: OrderStatus; version: number },
+) {
+  try {
+    await env.ORDER_ROOMS.getByName(id).publishState(state);
+  } catch {
+    // D1 already committed. Reconnecting clients receive its authoritative state.
+    console.error('No se pudo difundir un cambio de estado de pedido');
+  }
+}
+
+export async function refundOrderPayment(
+  env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+) {
+  if (actor.role !== 'owner') throw new HttpError(403, 'forbidden_role', 'Acceso no autorizado');
+  const database = env.DB;
+  const [order] = await drizzle(database).select({
+    id: orders.id, status: orders.status, version: orders.version, paymentStatus: orders.paymentStatus,
+  }).from(orders).where(eq(orders.number, number)).limit(1);
+  if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  if (order.paymentStatus !== 'paid' && order.paymentStatus !== 'cod_collected') {
+    throw new HttpError(409, 'invalid_payment_transition', 'El pago no se puede reembolsar');
+  }
+  const now = Date.now();
+  const [updated] = await database.batch([
+    database.prepare(`
+      UPDATE orders SET payment_status = 'refunded', version = version + 1, updated_at = ?
+      WHERE id = ? AND version = ? AND payment_status = ?
+    `).bind(now, order.id, order.version, order.paymentStatus),
+    paymentChanged(database, order.id, actor.id, order.paymentStatus, 'refunded', now),
+  ]);
+  if (updated?.meta.changes !== 1) throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
+  const state = { status: order.status, version: order.version + 1 };
+  await publishOrderState(env, order.id, state);
+  return { number, ...state, paymentStatus: 'refunded' as const, updatedAt: now };
+}
+
 async function applyOrderTransition(
   env: AppEnv['Bindings'], identifier: number | string, to: OrderStatus, adminId: string,
   expectedVersion?: number, shipping?: ShippingQuote,
@@ -94,7 +142,7 @@ async function applyOrderTransition(
   const database = env.DB;
   const [current] = await drizzle(database).select({
     id: orders.id, number: orders.number, status: orders.status, version: orders.version,
-    subtotalAmount: orders.subtotalAmount, currency: orders.currency,
+    subtotalAmount: orders.subtotalAmount, currency: orders.currency, paymentStatus: orders.paymentStatus,
   }).from(orders).where(typeof identifier === 'number'
     ? eq(orders.number, identifier)
     : eq(orders.id, identifier)).limit(1);
@@ -106,6 +154,14 @@ async function applyOrderTransition(
     throw new HttpError(409, 'invalid_transition', 'La transición no está permitida');
   }
 
+  const previousPayment = current.paymentStatus;
+  if (to === 'delivered' && previousPayment === 'unpaid') {
+    throw new HttpError(409, 'unpaid_delivery', 'Registra el pago antes de marcar el pedido como entregado');
+  }
+  let paymentStatus = previousPayment;
+  if (to === 'confirmed' && previousPayment === 'unpaid') paymentStatus = 'cod_pending';
+  if (to === 'delivered' && previousPayment === 'cod_pending') paymentStatus = 'cod_collected';
+
   const now = Date.now();
   const totalAmount = shipping ? current.subtotalAmount + shipping.shippingCost : null;
   if (totalAmount !== null && !Number.isSafeInteger(totalAmount)) {
@@ -113,37 +169,35 @@ async function applyOrderTransition(
   }
   const update = shipping
     ? database.prepare(`
-        UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
+        UPDATE orders SET status = ?, payment_status = ?, version = version + 1, updated_at = ?,
           expires_at = NULL, carrier = ?, shipping_cost = ?, shipping_eta_days = ?, total_amount = subtotal_amount + ?
-        WHERE id = ? AND version = ? AND status = ? AND subtotal_amount = ?
+        WHERE id = ? AND version = ? AND status = ? AND payment_status = ? AND subtotal_amount = ?
           AND anonymized_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
-      `).bind(to, now, shipping.carrier, shipping.shippingCost, shipping.shippingEtaDays,
-        shipping.shippingCost, current.id, current.version, current.status, current.subtotalAmount, now)
+      `).bind(to, paymentStatus, now, shipping.carrier, shipping.shippingCost, shipping.shippingEtaDays,
+        shipping.shippingCost, current.id, current.version, current.status, previousPayment, current.subtotalAmount, now)
     : database.prepare(`
-        UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
+        UPDATE orders SET status = ?, payment_status = ?, version = version + 1, updated_at = ?,
           expires_at = CASE WHEN ? = 'confirmed' THEN NULL ELSE expires_at END
-        WHERE id = ? AND version = ? AND status = ?
-      `).bind(to, now, to, current.id, current.version, current.status);
+        WHERE id = ? AND version = ? AND status = ? AND payment_status = ?
+      `).bind(to, paymentStatus, now, to, current.id, current.version, current.status, previousPayment);
   const [updated] = await database.batch([
     update,
-    // The prior UPDATE and audit INSERT share the D1 transaction and connection.
+    // Each insert is conditional on the immediately preceding statement changing one row.
     database.prepare(`
       INSERT INTO audit_log (id, admin_id, action, entity, entity_id, from_status, to_status, created_at)
       SELECT ?, ?, 'status_changed', 'order', ?, ?, ?, ? WHERE changes() = 1
     `).bind(crypto.randomUUID(), adminId, current.id, current.status, to, now),
+    ...(paymentStatus === previousPayment ? [] : [
+      paymentChanged(database, current.id, adminId, previousPayment, paymentStatus, now),
+    ]),
   ]);
   if (updated?.meta.changes !== 1) {
     throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
   }
   const state = { status: to, version: current.version + 1 };
-  try {
-    await env.ORDER_ROOMS.getByName(current.id).publishState(state);
-  } catch {
-    // D1 already committed. Reconnecting clients receive its authoritative state.
-    console.error('No se pudo difundir un cambio de estado de pedido');
-  }
+  await publishOrderState(env, current.id, state);
   return {
-    number: current.number, ...state, updatedAt: now,
+    number: current.number, ...state, paymentStatus, updatedAt: now,
     ...(shipping && { ...shipping, currency: current.currency, subtotalAmount: current.subtotalAmount, totalAmount }),
   };
 }

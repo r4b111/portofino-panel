@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/auth';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
-import { confirmOrderShipping, findAdminOrder, transitionOrder } from '../lib/orders/service';
+import { confirmOrderShipping, findAdminOrder, refundOrderPayment, transitionOrder } from '../lib/orders/service';
 import { orderStatuses } from '../lib/orders/state';
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -66,5 +66,17 @@ adminRoutes.patch('/orders/:number/shipping', requireAgent, async (context) => {
   const input = shipping.safeParse(await readJson(context));
   if (!input.success) throw new HttpError(400, 'invalid_shipping', 'Revisa la transportadora, el costo y el plazo');
   const order = await confirmOrderShipping(context.env, number.data, context.get('agent').id, input.data);
+  return context.json({ order });
+});
+
+const refund = z.object({ paymentStatus: z.literal('refunded') }).strict();
+
+adminRoutes.patch('/orders/:number/payment', requireAgent, ownerOnly, async (context) => {
+  const number = orderNumber.safeParse(context.req.param('number'));
+  if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
+  if (!refund.safeParse(await readJson(context)).success) {
+    throw new HttpError(400, 'invalid_payment_status', 'Estado de pago inválido');
+  }
+  const order = await refundOrderPayment(context.env, number.data, context.get('agent'));
   return context.json({ order });
 });
