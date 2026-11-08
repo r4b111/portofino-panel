@@ -1,0 +1,24 @@
+{
+  "name": "portofino-orders",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "typecheck": "tsc --noEmit",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "hono": "4.12.18",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260515.1",
+    "drizzle-kit": "0.31.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.5",
+    "wrangler": "4.92.0"
+  }
+}
