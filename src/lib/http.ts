@@ -1,11 +1,16 @@
 import type { ErrorHandler } from 'hono';
 import { HttpError } from './errors';
+import type { OrderStatus } from './orders/state';
 
 export interface AppEnv {
   Bindings: {
     DB: D1Database;
     DATA_SECRET?: string;
-    ADMIN_TOKEN?: string;
+    ADMIN_SESSION_SECRET?: string;
+  };
+  Variables: {
+    agent: { id: string; role: 'owner' | 'agent' };
+    targetStatus: OrderStatus;
   };
 }
 

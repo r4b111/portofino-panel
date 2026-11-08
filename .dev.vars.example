@@ -1,3 +1,3 @@
 # Genera valores aleatorios e independientes, por ejemplo con openssl rand -hex 32.
 DATA_SECRET=
-ADMIN_TOKEN=
+ADMIN_SESSION_SECRET=

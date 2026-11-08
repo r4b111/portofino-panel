@@ -72,3 +72,26 @@ export const orderEvents = sqliteTable('order_events', {
   check('order_events_actor_check', sql`${table.actorType} IN ${actorTypes}`.inlineParams()),
   check('order_events_type_check', sql`${table.type} IN ${orderEventTypes}`.inlineParams()),
 ]);
+
+export const admins = sqliteTable('admins', {
+  id: text('id').primaryKey().notNull(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role', { enum: ['owner', 'agent'] }).notNull(),
+  totpSecret: text('totp_secret'),
+}, (table) => [
+  check('admins_role_check', sql`${table.role} IN ('owner', 'agent')`),
+]);
+
+export const auditLog = sqliteTable('audit_log', {
+  id: text('id').primaryKey().notNull(),
+  adminId: text('admin_id').references(() => admins.id, { onDelete: 'set null' }),
+  action: text('action').notNull(),
+  entity: text('entity').notNull(),
+  entityId: text('entity_id').notNull(),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status'),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  index('audit_log_entity_created_idx').on(table.entity, table.entityId, table.createdAt),
+]);
