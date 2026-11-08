@@ -34,3 +34,9 @@ Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e indepen
 Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login`. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
 
 `PATCH /admin/orders/:number/status` recibe `{ "status": "..." }`. El mapa de transiciones está en `src/lib/orders/state.ts`. La cancelación exige el rol `owner`. Cada cambio válido y su registro en `audit_log` se guardan juntos y el cambio de versión protege contra escrituras concurrentes.
+
+## Panel de pedidos
+
+Entra en `/login` con una cuenta administrativa de D1. El panel renderiza HTML en español con Hono JSX. `/pedidos` lista hasta 50 pedidos por página y admite `estado` y `pagina` como parámetros. `/pedidos/:id` usa el identificador interno del pedido y muestra sus ítems, eventos y cambios de estado auditados.
+
+Los botones envían el nuevo estado y la versión del formulario. Si otro agente ya actualizó el pedido, el servidor devuelve HTTP 409, muestra «Otro agente lo modificó» y conserva los valores enviados. El formulario queda disponible para consulta y el enlace de recarga permite revisar la versión vigente antes de decidir otra transición.

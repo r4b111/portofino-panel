@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { handleError } from './lib/http';
 import type { AppEnv } from './lib/http';
 import { adminRoutes } from './routes/admin';
+import { panelRoutes } from './routes/panel';
 import { publicRoutes } from './routes/public';
 
 const app = new Hono<AppEnv>();
@@ -18,5 +19,6 @@ app.notFound((context) => context.json({
 }, 404));
 app.route('/', publicRoutes);
 app.route('/admin', adminRoutes);
+app.route('/', panelRoutes);
 
 export default app;

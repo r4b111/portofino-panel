@@ -2,6 +2,11 @@ import type { ErrorHandler } from 'hono';
 import { HttpError } from './errors';
 import type { OrderStatus } from './orders/state';
 
+export interface TransitionDraft {
+  status: OrderStatus;
+  expectedVersion: number;
+}
+
 export interface AppEnv {
   Bindings: {
     DB: D1Database;
@@ -11,6 +16,7 @@ export interface AppEnv {
   Variables: {
     agent: { id: string; role: 'owner' | 'agent' };
     targetStatus: OrderStatus;
+    transitionDraft: TransitionDraft;
   };
 }
 
