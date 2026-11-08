@@ -1,9 +1,16 @@
+import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.toml' } })],
   test: {
-    environment: 'node',
     include: ['src/**/*.test.ts'],
-    passWithNoTests: true,
+    coverage: {
+      enabled: true,
+      provider: 'istanbul',
+      include: ['src/lib/crypto.ts', 'src/lib/tokens.ts'],
+      reporter: ['text'],
+      thresholds: { 100: true, perFile: true },
+    },
   },
 });
