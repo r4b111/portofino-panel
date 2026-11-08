@@ -52,7 +52,7 @@ adminRoutes.patch('/orders/:number/status', requireAgent, async (context, next) 
   const number = orderNumber.safeParse(context.req.param('number'));
   if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
   const order = await transitionOrder(
-    context.env.DB, number.data, context.get('targetStatus'), context.get('agent').id,
+    context.env, number.data, context.get('targetStatus'), context.get('agent').id,
   );
   return context.json({ order });
 });

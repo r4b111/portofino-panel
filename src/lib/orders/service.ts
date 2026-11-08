@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { auditLog, orderEvents, orderItems, orders } from '../../db/schema';
 import { HttpError } from '../errors';
+import type { AppEnv } from '../http';
 import { allowedTransitions } from './state';
 import type { OrderStatus } from './state';
 
@@ -17,15 +18,27 @@ const trackingFields = {
   updatedAt: orders.updatedAt,
 };
 
-export async function findTrackingOrder(database: D1Database, token: string) {
+async function trackingCondition(token: string) {
   const hash = await hashTrackingToken(token);
   const now = Date.now();
-  const [order] = await drizzle(database).select(trackingFields).from(orders).where(and(
+  return and(
     eq(orders.trackingTokenHash, hash),
     or(isNull(orders.tokenExpiresAt), gt(orders.tokenExpiresAt, now)),
     or(isNull(orders.expiresAt), gt(orders.expiresAt, now)),
     isNull(orders.anonymizedAt),
-  )).limit(1);
+  );
+}
+
+export async function findTrackingOrder(database: D1Database, token: string) {
+  const [order] = await drizzle(database).select(trackingFields).from(orders)
+    .where(await trackingCondition(token)).limit(1);
+  return order;
+}
+
+export async function findRealtimeOrder(database: D1Database, token: string) {
+  const [order] = await drizzle(database).select({
+    id: orders.id, expiresAt: orders.expiresAt, tokenExpiresAt: orders.tokenExpiresAt,
+  }).from(orders).where(await trackingCondition(token)).limit(1);
   return order;
 }
 
@@ -41,9 +54,10 @@ export async function findAdminOrder(database: D1Database, number: number) {
 }
 
 export async function transitionOrder(
-  database: D1Database, identifier: number | string, to: OrderStatus, adminId: string,
+  env: AppEnv['Bindings'], identifier: number | string, to: OrderStatus, adminId: string,
   expectedVersion?: number,
 ) {
+  const database = env.DB;
   const [current] = await drizzle(database).select({
     id: orders.id, number: orders.number, status: orders.status, version: orders.version,
   }).from(orders).where(typeof identifier === 'number'
@@ -72,7 +86,14 @@ export async function transitionOrder(
   if (updated?.meta.changes !== 1) {
     throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
   }
-  return { number: current.number, status: to, version: current.version + 1, updatedAt: now };
+  const state = { status: to, version: current.version + 1 };
+  try {
+    await env.ORDER_ROOMS.getByName(current.id).publishState(state);
+  } catch {
+    // D1 already committed. Reconnecting clients receive its authoritative state.
+    console.error('No se pudo difundir un cambio de estado de pedido');
+  }
+  return { number: current.number, ...state, updatedAt: now };
 }
 
 export const panelPageSize = 50;

@@ -1,4 +1,5 @@
 import type { ErrorHandler } from 'hono';
+import type { OrderRoom } from '../durable/order-room';
 import { HttpError } from './errors';
 import type { OrderStatus } from './orders/state';
 
@@ -10,11 +11,12 @@ export interface TransitionDraft {
 export interface AppEnv {
   Bindings: {
     DB: D1Database;
+    ORDER_ROOMS: DurableObjectNamespace<OrderRoom>;
     DATA_SECRET?: string;
     ADMIN_SESSION_SECRET?: string;
   };
   Variables: {
-    agent: { id: string; role: 'owner' | 'agent' };
+    agent: { id: string; role: 'owner' | 'agent'; expiresAt: number };
     targetStatus: OrderStatus;
     transitionDraft: TransitionDraft;
   };

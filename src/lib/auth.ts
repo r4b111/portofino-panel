@@ -64,7 +64,7 @@ export const requireAgent: MiddlewareHandler<AppEnv> = async (context, next) => 
     throw new HttpError(401, 'unauthorized', 'Inicia sesión para continuar');
   }
 
-  context.set('agent', { id: admin.id, role: admin.role });
+  context.set('agent', { id: admin.id, role: admin.role, expiresAt: session.expiresAt });
   await next();
 };
 

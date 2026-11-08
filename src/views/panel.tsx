@@ -4,6 +4,7 @@ import type { TransitionDraft } from '../lib/http';
 import type { findPanelOrder, listPanelOrders } from '../lib/orders/service';
 import { allowedTransitions, orderStatuses } from '../lib/orders/state';
 import type { OrderStatus } from '../lib/orders/state';
+import { OrderChat } from './order-chat';
 
 const statusLabels: Record<OrderStatus, string> = {
   pending_confirmation: 'Pendiente de confirmación',
@@ -183,6 +184,7 @@ export function orderDetail(
           <td>{amount(item.lineAmount, order.currency)}</td></tr>)}</tbody>
       </table> : <p>Sin ítems registrados.</p>}
     </section>
+    <OrderChat ticketUrl={'/api/pedidos/' + encodeURIComponent(order.id) + '/realtime-token'} />
     <section class="card"><h2>Historial</h2>
       {history.length ? <ol>{history.map((event) => <li>
         <strong>{Object.hasOwn(events, event.type) ? events[event.type] : 'Evento registrado'}</strong>

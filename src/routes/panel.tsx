@@ -95,11 +95,28 @@ panelRoutes.post('/pedidos/:id', requireAgent, sameOriginForm, async (context, n
   const draft = context.get('transitionDraft');
   const agent = context.get('agent');
   try {
-    await transitionOrder(context.env.DB, id.data, draft.status, agent.id, draft.expectedVersion);
+    await transitionOrder(context.env, id.data, draft.status, agent.id, draft.expectedVersion);
   } catch (error) {
     if (!(error instanceof HttpError) || error.status !== 409) throw error;
     const detail = await findPanelOrder(context.env.DB, id.data);
     return context.html(orderDetail(detail, agent.role, { draft, message: error.message }), 409);
   }
   return context.redirect('/pedidos/' + encodeURIComponent(id.data), 303);
+});
+
+panelRoutes.post('/api/pedidos/:id/realtime-token', requireAgent, async (context) => {
+  const origin = context.req.header('Origin');
+  if (origin && origin !== new URL(context.req.url).origin) {
+    throw new HttpError(403, 'forbidden_origin', 'Origen no permitido');
+  }
+  const id = orderId.safeParse(context.req.param('id'));
+  if (!id.success) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  const order = await context.env.DB.prepare(
+    'SELECT expires_at FROM orders WHERE id = ? AND anonymized_at IS NULL AND (expires_at IS NULL OR expires_at > ?)',
+  ).bind(id.data, Date.now()).first<{ expires_at: number | null }>();
+  if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  const agent = context.get('agent');
+  return context.json(await context.env.ORDER_ROOMS.getByName(id.data).issueTicket(
+    id.data, 'agent', 'agent:' + agent.id, Math.min(order.expires_at ?? Infinity, agent.expiresAt),
+  ));
 });

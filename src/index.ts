@@ -21,4 +21,5 @@ app.route('/', publicRoutes);
 app.route('/admin', adminRoutes);
 app.route('/', panelRoutes);
 
+export { OrderRoom } from './durable/order-room';
 export default app;

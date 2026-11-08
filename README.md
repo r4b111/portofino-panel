@@ -40,3 +40,11 @@ Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login`. 
 Entra en `/login` con una cuenta administrativa de D1. El panel renderiza HTML en español con Hono JSX. `/pedidos` lista hasta 50 pedidos por página y admite `estado` y `pagina` como parámetros. `/pedidos/:id` usa el identificador interno del pedido y muestra sus ítems, eventos y cambios de estado auditados.
 
 Los botones envían el nuevo estado y la versión del formulario. Si otro agente ya actualizó el pedido, el servidor devuelve HTTP 409, muestra «Otro agente lo modificó» y conserva los valores enviados. El formulario queda disponible para consulta y el enlace de recarga permite revisar la versión vigente antes de decidir otra transición.
+
+## Conversación en tiempo real
+
+Cada pedido tiene un Durable Object con almacenamiento SQLite. En local, Wrangler aplica su migración de clase al iniciar el Worker. El panel conecta desde `/pedidos/:id`. El cliente abre `/seguimiento` con su código de seguimiento o mediante un enlace privado `/seguimiento#token=<código>`. Al reabrir ese enlace o la página del panel, se recuperan los mensajes guardados.
+
+El cliente solicita un ticket con `POST /api/orders/realtime-token` y `X-Tracking-Token`. El panel usa `POST /api/pedidos/:id/realtime-token` con su cookie. El ticket dura hasta cinco minutos, se consume una vez y se limita por el vencimiento del acceso al pedido o de la sesión. Se pasa a `GET /api/orders/:id/realtime?after=0` mediante los subprotocolos `portofino.v1` y `ticket.<token>`. El servidor negocia `portofino.v1`.
+
+Para enviar texto, usa `{ "type": "message", "id": "<UUID>", "body": "..." }`. Un reintento usa el mismo UUID. El servidor confirma duplicados con `ack` y difunde cada mensaje nuevo una sola vez. Las conexiones nuevas reciben `status`, el historial posterior a `after` y luego `ready`. El navegador conserva el cursor mientras la página está abierta y reconstruye el historial al recargarla. D1 conserva la versión de estado de referencia, que se consulta al reconectar.
