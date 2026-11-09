@@ -75,15 +75,18 @@ function Page({ title, children }: { title: string; children: Child }) {
   </html>;
 }
 
-export function loginPage(email = '', error = '') {
+export function loginPage(email = '', error = '', code?: string) {
   return html`<!doctype html>${<Page title="Iniciar sesión">
     <form class="card login stack" method="post" action="/login">
-      {error && <p role="alert" class="alert">{error}</p>}
+      {error && <p role="alert" class="alert" data-error-code={code}>{error}</p>}
       <label>Correo electrónico<input name="email" type="email" value={email}
         autocomplete="username" maxlength={254} required /></label>
       <label>Contraseña<input name="password" type="password"
         autocomplete="current-password" maxlength={256} required /></label>
-      <button type="submit">Entrar</button>
+      <label>Código de autenticación (si está activado)
+          <input name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength={6} pattern="[0-9]{6}" />
+        </label>
+        <button type="submit">Entrar</button>
     </form>
   </Page>}`;
 }

@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import { csrf } from 'hono/csrf';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
-import { loginAgent, requireAgent, requireRole } from '../lib/auth';
+import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/auth';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import { findPanelOrder, listPanelOrders, panelPageSize, transitionOrder } from '../lib/orders/service';
@@ -13,10 +13,6 @@ import { loginPage, orderDetail, orderList, panelError } from '../views/panel';
 export const panelRoutes = new Hono<AppEnv>();
 const sameOriginForm = csrf();
 const ownerOnly = requireRole('owner');
-const credentials = z.object({
-  email: z.string().trim().max(254).email(),
-  password: z.string().min(1).max(256),
-});
 const positiveInteger = z.string().regex(/^[1-9][0-9]*$/)
   .transform(Number).refine(Number.isSafeInteger);
 const filters = z.object({
@@ -52,16 +48,16 @@ panelRoutes.get('/login', (context) => context.html(loginPage()));
 
 panelRoutes.post('/login', sameOriginForm, async (context) => {
   const fields = await formBody(context);
-  const input = credentials.safeParse(fields);
+  const input = loginCredentials.safeParse(fields);
   if (!input.success) {
     const email = typeof fields.email === 'string' ? fields.email.slice(0, 254) : '';
     return context.html(loginPage(email, 'Revisa el correo y la contraseña'), 400);
   }
   try {
-    await loginAgent(context, input.data.email, input.data.password);
+    await loginAgent(context, input.data.email, input.data.password, input.data.totp);
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
-      return context.html(loginPage(input.data.email, error.message), 401);
+      return context.html(loginPage(input.data.email, error.message, error.code), 401);
     }
     throw error;
   }
