@@ -1,3 +1,4 @@
-# Genera valores aleatorios e independientes, por ejemplo con openssl rand -hex 32.
+# Secreto aleatorio para derivar la clave de cifrado de datos personales.
 DATA_SECRET=
+# Token Bearer de al menos 32 caracteres para las rutas administrativas.
 ADMIN_TOKEN=

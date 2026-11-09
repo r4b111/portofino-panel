@@ -3,18 +3,23 @@ import { z } from 'zod';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import { findAdminOrder } from '../lib/orders/service';
+import { hashTrackingToken } from '../lib/tokens';
 
 export const adminRoutes = new Hono<AppEnv>();
 const orderNumber = z.string().regex(/^[1-9][0-9]*$/).transform(Number)
   .refine(Number.isSafeInteger);
 
 async function sameToken(received: string, expected: string): Promise<boolean> {
-  const encoder = new TextEncoder();
   const [left, right] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(received)),
-    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+    hashTrackingToken(received),
+    hashTrackingToken(expected),
   ]);
-  return crypto.subtle.timingSafeEqual(left, right);
+  // Both SHA-256 digests have 64 hex characters. Compare every position.
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
 }
 
 adminRoutes.use('*', async (context, next) => {
