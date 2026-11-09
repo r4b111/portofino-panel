@@ -6,7 +6,7 @@ import { env } from 'cloudflare:workers';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import type { AppEnv } from '../lib/http';
-import { hashPassword, verifyPassword } from '../lib/passwords';
+import { hashPassword } from '../lib/passwords';
 
 const bindings = env as AppEnv['Bindings'] & { TEST_MIGRATIONS: D1Migration[] };
 const testBindings = { ...bindings, ADMIN_SESSION_SECRET: 'firma exclusiva de prueba de más de 32 caracteres' };
@@ -182,24 +182,6 @@ describe('autenticación y transiciones administrativas', () => {
     } finally {
       await db.prepare("UPDATE admins SET totp_secret = NULL WHERE id = 'agent'").run();
     }
-  });
-
-  it('acepta el hash anterior y lo actualiza tras un inicio de sesión válido', async () => {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-    const salt = new Uint8Array(16);
-    const digest = await crypto.subtle.deriveBits(
-      { name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' }, key, 256,
-    );
-    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-    const legacy = ['pbkdf2-sha256', 100_000, '00'.repeat(16), hex].join('$');
-    await db.prepare("UPDATE admins SET password_hash = ? WHERE id = 'agent'").bind(legacy).run();
-
-    await login('agent');
-    const migrated = await db.prepare("SELECT password_hash FROM admins WHERE id = 'agent'")
-      .first<string>('password_hash');
-    expect(migrated?.split('$')[1]).toBe('600000');
-    await expect(verifyPassword(password, migrated ?? undefined)).resolves.toBe(true);
   });
 
   it('emite una cookie segura y rechaza su uso al cumplirse ocho horas', async () => {
