@@ -3,10 +3,11 @@
 import { applyD1Migrations } from 'cloudflare:test';
 import type { D1Migration } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import { decrypt } from '../lib/crypto';
 import type { AppEnv } from '../lib/http';
+import { createOrder } from '../lib/orders/service';
 import { hashTrackingToken } from '../lib/tokens';
 
 const testEnv = env as AppEnv['Bindings'] & { TEST_MIGRATIONS: D1Migration[] };
@@ -112,6 +113,42 @@ describe('POST /api/orders', () => {
   it('rechaza un email inválido antes de escribir', async () => {
     expect((await postOrder({ ...payload, email: 'correo-invalido' })).status).toBe(400);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM orders').first('count')).toBe(0);
+  });
+
+  it('asigna números distintos a dos altas simultáneas en la misma base', async () => {
+    const [first, second] = await Promise.all([
+      createOrder(db, secret, payload),
+      createOrder(db, secret, payload),
+    ]);
+    expect(first.number).not.toBe(second.number);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM orders').first('count')).toBe(2);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM order_events WHERE type = 'created'").first('count')).toBe(2);
+  });
+
+  it('reintenta colisiones de número que D1 reporta directamente o como causa', async () => {
+    const batch = vi.spyOn(db, 'batch')
+      .mockRejectedValueOnce(new Error('orders_number_uq'))
+      .mockRejectedValueOnce(new Error('D1_ERROR', { cause: new Error('UNIQUE constraint failed: orders.number') }));
+    try {
+      await expect(createOrder(db, secret, payload)).resolves.toHaveProperty('number');
+      expect(batch).toHaveBeenCalledTimes(3);
+    } finally {
+      batch.mockRestore();
+    }
+  });
+
+  it.each([
+    { message: 'UNIQUE constraint failed: orders.number', attempts: 3 },
+    { message: 'UNIQUE constraint failed: orders.tracking_token_hash', attempts: 1 },
+  ])('propaga $message después de $attempts intento(s)', async ({ message, attempts }) => {
+    const failure = new Error(message);
+    const batch = vi.spyOn(db, 'batch').mockRejectedValue(failure);
+    try {
+      await expect(createOrder(db, secret, payload)).rejects.toBe(failure);
+      expect(batch).toHaveBeenCalledTimes(attempts);
+    } finally {
+      batch.mockRestore();
+    }
   });
 
   it('revierte el pedido y sus ítems si falla la escritura del evento', async () => {

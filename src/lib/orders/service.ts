@@ -157,6 +157,15 @@ interface CreateOrderInput {
 }
 
 const orderLifetimeMs = 72 * 60 * 60 * 1000;
+const maxOrderAttempts = 3;
+const orderNumberCollision = /\borders_number_uq\b|UNIQUE constraint failed: orders\.number\b(?!,)/;
+
+function isOrderNumberCollision(error: unknown): boolean {
+  if (typeof error === 'string') return orderNumberCollision.test(error);
+  if (!(error instanceof Error)) return false;
+  return orderNumberCollision.test(error.message)
+    || (error.cause !== error && isOrderNumberCollision(error.cause));
+}
 
 export async function createOrder(database: D1Database, secret: string | undefined, input: CreateOrderInput) {
   if (!secret?.trim()) {
@@ -168,7 +177,6 @@ export async function createOrder(database: D1Database, secret: string | undefin
   const catalog = await db.select().from(orderCatalog)
     .where(inArray(orderCatalog.productId, productIds));
   const products = new Map(catalog.map((product) => [product.productId, product]));
-  const orderId = crypto.randomUUID();
   let subtotalAmount = 0;
 
   const items = input.items.map(({ productId, qty }) => {
@@ -181,7 +189,7 @@ export async function createOrder(database: D1Database, secret: string | undefin
     if (!Number.isSafeInteger(lineAmount) || !Number.isSafeInteger(subtotalAmount)) {
       throw new HttpError(400, 'invalid_amount', 'El importe del pedido supera el máximo permitido');
     }
-    return { ...product, id: crypto.randomUUID(), orderId, qty, lineAmount };
+    return { ...product, qty, lineAmount };
   });
 
   const token = generateTrackingToken();
@@ -194,36 +202,42 @@ export async function createOrder(database: D1Database, secret: string | undefin
 
   const now = Date.now();
   const expiresAt = now + orderLifetimeMs;
-  // Assign the number in the INSERT so concurrent requests cannot read the same MAX.
-  const insertOrder = db.insert(orders).values({
-    id: orderId,
-    number: sql<number>`(SELECT COALESCE(MAX(number), 0) + 1 FROM orders)`,
-    trackingTokenHash,
-    subtotalAmount,
-    buyerName: input.name,
-    buyerEmailEnc,
-    buyerPhoneEnc,
-    shipAddressEnc,
-    shipCity: input.city ?? null,
-    createdAt: now,
-    updatedAt: now,
-    expiresAt,
-  }).returning({ number: orders.number });
-
-  const [inserted] = await db.batch([
-    insertOrder,
-    ...items.map((item) => db.insert(orderItems).values(item)),
-    db.insert(orderEvents).values({
-      id: crypto.randomUUID(),
-      orderId,
-      seq: 1,
-      actorType: 'customer',
-      type: 'created',
-      toStatus: 'pending_confirmation',
+  for (let attempt = 1; ; attempt++) {
+    const orderId = crypto.randomUUID();
+    const insertOrder = db.insert(orders).values({
+      id: orderId,
+      number: sql<number>`(SELECT COALESCE(MAX(number), 0) + 1 FROM orders)`,
+      trackingTokenHash,
+      subtotalAmount,
+      buyerName: input.name,
+      buyerEmailEnc,
+      buyerPhoneEnc,
+      shipAddressEnc,
+      shipCity: input.city ?? null,
       createdAt: now,
-    }),
-  ]);
-  const [order] = inserted;
-  if (!order) throw new Error('D1 no devolvió el número del pedido');
-  return { number: order.number, token, expiresAt };
+      updatedAt: now,
+      expiresAt,
+    }).returning({ number: orders.number });
+
+    try {
+      const [inserted] = await db.batch([
+        insertOrder,
+        ...items.map((item) => db.insert(orderItems).values({ ...item, id: crypto.randomUUID(), orderId })),
+        db.insert(orderEvents).values({
+          id: crypto.randomUUID(),
+          orderId,
+          seq: 1,
+          actorType: 'customer',
+          type: 'created',
+          toStatus: 'pending_confirmation',
+          createdAt: now,
+        }),
+      ]);
+      const [order] = inserted;
+      if (!order) throw new Error('D1 no devolvió el número del pedido');
+      return { number: order.number, token, expiresAt };
+    } catch (error) {
+      if (attempt >= maxOrderAttempts || !isOrderNumberCollision(error)) throw error;
+    }
+  }
 }
