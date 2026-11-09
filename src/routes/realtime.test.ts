@@ -166,6 +166,25 @@ describe('tiempo real del pedido', () => {
       expect(retryAfter).toBeGreaterThan(0);
       expect(retryAfter).toBeLessThanOrEqual(60);
 
+      const page = await request('/widgets/chat');
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('data-embedded-chat');
+      expect(html).toContain('data-chat-notice');
+      expect(html).toContain('maxlength="2000"');
+      expect(html).not.toContain(tracking);
+      const component = await request('/pf-chat.js');
+      expect(component.headers.get('Content-Type')).toContain('text/javascript');
+      expect(await component.text()).toContain("customElements.define('pf-chat'");
+
+      socket.close(1000);
+      const reopened = await connect(await customerTicket());
+      expect(reopened.frames.find(({ type }) => type === 'status'))
+        .toEqual(frames.find(({ type }) => type === 'status'));
+      const history = messages(reopened.frames);
+      expect(history.filter(({ id: messageId }) => messageId === id)).toHaveLength(1);
+      expect(history.filter(({ body }) => body === 'Desde HTTP')).toHaveLength(9);
+
       await bindings.DB.prepare('UPDATE rate_limits SET window_start = 0').run();
       expect((await send('Ventana nueva')).status).toBe(201);
     } finally {

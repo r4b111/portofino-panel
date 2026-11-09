@@ -6,10 +6,16 @@ import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import { createOrder, findRealtimeOrder, findTrackingOrder } from '../lib/orders/service';
 import { trackingPage } from '../views/order-chat';
+import { widgetScript } from '../views/widget';
 
 export const publicRoutes = new Hono<AppEnv>();
 
 publicRoutes.get('/seguimiento', (context) => context.html(trackingPage()));
+
+publicRoutes.get('/pf-chat.js', (context) =>
+  context.body(widgetScript, 200, { 'Content-Type': 'text/javascript; charset=UTF-8' }));
+
+publicRoutes.get('/widgets/chat', (context) => context.html(trackingPage(true)));
 
 publicRoutes.get('/health', (context) => context.json({ ok: true }));
 

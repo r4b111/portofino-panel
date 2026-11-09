@@ -6,6 +6,8 @@ const chatScript = String.raw`
   if (!root) return;
   const feed = root.querySelector('[data-messages]');
   const indicator = root.querySelector('[data-connection]');
+  const notice = root.querySelector('[data-chat-notice]');
+  const embedded = root.hasAttribute('data-embedded-chat');
   const state = root.querySelector('[data-live-status]');
   const form = root.querySelector('[data-message-form]');
   const input = form.elements.body;
@@ -18,6 +20,8 @@ const chatScript = String.raw`
   };
   let socket, timer, renewal, customerDraft;
   let generation = 0;
+  let reconnectDelay = 1000;
+  let sending = false;
   let cursor = 0;
   let version = 0;
   let trackingToken = '';
@@ -42,7 +46,8 @@ const chatScript = String.raw`
       if (current !== generation) return;
       submit.disabled = true;
       indicator.textContent = 'Reconectando…';
-      timer = setTimeout(() => connect(current), 1500);
+      timer = setTimeout(() => connect(current), reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     };
     fetch(root.dataset.ticketUrl, { method: 'POST', headers }).then(async (response) => {
       if (current !== generation) return;
@@ -74,7 +79,8 @@ const chatScript = String.raw`
             break;
           case 'ready':
             indicator.textContent = 'En línea';
-            submit.disabled = false;
+            reconnectDelay = 1000;
+            submit.disabled = sending;
             pending.forEach((message) => connected.send(message));
             break;
           case 'error': indicator.textContent = frame.message; break;
@@ -91,11 +97,12 @@ const chatScript = String.raw`
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const body = input.value.trim();
-    if (!socket || socket.readyState !== WebSocket.OPEN || submit.disabled || !body) return;
-    if (access) {
+    if (!socket || socket.readyState !== WebSocket.OPEN || submit.disabled || sending || !body) return;
+    if (access || embedded) {
       const current = generation;
       const original = input.value;
       if (customerDraft?.body !== body) customerDraft = { id: crypto.randomUUID(), body };
+      sending = true;
       submit.disabled = true;
       try {
         const response = await fetch('/api/orders/messages', {
@@ -105,18 +112,21 @@ const chatScript = String.raw`
         });
         if (current !== generation) return;
         if (response.status === 429) {
-          indicator.textContent = 'Límite de mensajes alcanzado. Intenta en ' + response.headers.get('Retry-After') + ' s.';
+          notice.textContent = 'Límite de mensajes alcanzado. Intenta en ' + response.headers.get('Retry-After') + ' s.';
         } else if (response.ok) {
           if (input.value === original) input.value = '';
           customerDraft = undefined;
-          indicator.textContent = 'En línea';
+          notice.textContent = '';
         } else {
           indicator.textContent = 'No se pudo enviar el mensaje.';
         }
       } catch {
         if (current === generation) indicator.textContent = 'Se interrumpió la conexión. Intenta de nuevo.';
       } finally {
-        if (current === generation) submit.disabled = socket?.readyState !== WebSocket.OPEN;
+        if (current === generation) {
+          sending = false;
+          submit.disabled = socket?.readyState !== WebSocket.OPEN;
+        }
       }
       return;
     }
@@ -133,6 +143,9 @@ const chatScript = String.raw`
     clearTimeout(renewal);
     if (socket) socket.close();
     trackingToken = token;
+    reconnectDelay = 1000;
+    sending = false;
+    notice.textContent = '';
     cursor = 0;
     version = 0;
     pending.clear();
@@ -142,8 +155,11 @@ const chatScript = String.raw`
     connect(generation);
   }
 
-  if (access) {
-    const savedLink = new URLSearchParams(location.hash.slice(1)).get('token');
+  const savedLink = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (embedded) {
+    if (savedLink && /^[A-Za-z0-9_-]{43}$/.test(savedLink)) start(savedLink);
+    else indicator.textContent = 'Código de seguimiento inválido.';
+  } else if (access) {
     access.addEventListener('submit', (event) => {
       event.preventDefault();
       const token = access.elements.tracking.value.trim();
@@ -163,18 +179,22 @@ const chatScript = String.raw`
 
   window.addEventListener('pagehide', () => {
     generation++;
+    sending = false;
     clearTimeout(timer);
     clearTimeout(renewal);
     if (socket) socket.close();
   });
   window.addEventListener('pageshow', (event) => {
-    if (event.persisted && (!access || trackingToken)) connect(++generation);
+    if (event.persisted && ((!access && !embedded) || trackingToken)) connect(++generation);
   });
 })();
 `;
 
-export function OrderChat({ ticketUrl, customer = false }: { ticketUrl: string; customer?: boolean }) {
-  return <section class="card" data-order-chat="" data-ticket-url={ticketUrl} aria-labelledby="chat-title">
+export function OrderChat({ ticketUrl, customer = false, embedded = false }: {
+  ticketUrl: string; customer?: boolean; embedded?: boolean;
+}) {
+  return <section class="card" data-order-chat="" data-ticket-url={ticketUrl}
+    data-embedded-chat={embedded ? '' : undefined} aria-labelledby="chat-title">
     <h2 id="chat-title">Conversación del pedido</h2>
     {customer && <form method="post" data-tracking-form="">
       <label>Código de seguimiento <input name="tracking" type="password" required
@@ -184,6 +204,7 @@ export function OrderChat({ ticketUrl, customer = false }: { ticketUrl: string; 
     <p>Estado en vivo <strong data-live-status="">Por consultar</strong></p>
     <p role="status" data-connection="">{customer ? 'Ingresa tu código para consultar el pedido.' : 'Conectando…'}</p>
     <ol data-messages="" aria-live="polite" aria-label="Mensajes"></ol>
+    <p role="status" data-chat-notice=""></p>
     <form method="post" data-message-form="">
       <label>Mensaje <input name="body" maxlength={2000} required autocomplete="off" /></label>
       <button type="submit" disabled>Enviar</button>
@@ -192,12 +213,24 @@ export function OrderChat({ ticketUrl, customer = false }: { ticketUrl: string; 
   </section>;
 }
 
-export function trackingPage() {
+const embeddedStyle = `
+  body { margin: 0; padding: 1rem; color: #19362c; background: #fff; font: 1rem system-ui, sans-serif; }
+  h2 { margin: 0; font-size: 1.2rem; }
+  ol { max-height: 18rem; overflow: auto; overflow-wrap: anywhere; }
+  input { box-sizing: border-box; display: block; width: 100%; padding: .45rem; font: inherit; }
+  button { margin-top: .6rem; padding: .5rem .8rem; color: white; background: #145741;
+    border: 0; border-radius: .5rem; font: inherit; }
+  button:disabled { opacity: .6; }
+  [data-chat-notice]:not(:empty) { background: #fff4d5; color: #624700; padding: .6rem; border-radius: .5rem; }
+`;
+
+export function trackingPage(embedded = false) {
   return html`<!doctype html>${<html lang="es">
     <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="referrer" content="no-referrer" /><title>Seguimiento | Portofino</title></head>
-    <body><main><h1>Seguimiento de pedido</h1>
-      <OrderChat ticketUrl="/api/orders/realtime-token" customer />
+      <meta name="referrer" content="no-referrer" /><title>Seguimiento | Portofino</title>
+      {embedded && <style>{raw(embeddedStyle)}</style>}</head>
+    <body><main>{!embedded && <h1>Seguimiento de pedido</h1>}
+      <OrderChat ticketUrl="/api/orders/realtime-token" customer={!embedded} embedded={embedded} />
     </main></body>
   </html>}`;
 }

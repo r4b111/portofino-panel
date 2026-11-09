@@ -68,3 +68,14 @@ El cliente puede enviar mensajes con `POST /api/orders/messages`, el encabezado 
 `POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0007_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
 
 La respuesta `201` entrega `{ number, token, expiresAt }`. Guarda el token en el cliente al recibirlo. El pedido pendiente vence a las 72 horas. Si se confirma, se elimina ese vencimiento y el código de seguimiento sigue funcionando.
+
+## Chat embebido
+
+Carga el script clásico del Worker en la página privada del pedido y asigna al componente el token que recibiste al crearlo.
+
+```html
+<script defer src="https://pedidos.example.com/pf-chat.js"></script>
+<pf-chat token="TOKEN_DEL_PEDIDO"></pf-chat>
+```
+
+Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Worker en `script-src` y `frame-src`. Al abrir la conversación tras recargar, el widget recupera el estado y el historial del pedido. Si se interrumpe la conexión, reintenta con pausas crecientes de hasta 30 segundos. Si se alcanza el límite de envío, muestra un aviso y conserva el borrador.
