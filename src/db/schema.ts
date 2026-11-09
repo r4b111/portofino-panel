@@ -16,10 +16,10 @@ export const orders = sqliteTable('orders', {
   carrier: text('carrier'),
   totalAmount: integer('total_amount'),
   customerId: text('customer_id'),
-  buyerName: text('buyer_name').notNull(),
-  buyerEmailEnc: text('buyer_email_enc').notNull(),
-  buyerPhoneEnc: text('buyer_phone_enc').notNull(),
-  shipAddressEnc: text('ship_address_enc').notNull(),
+  buyerName: text('buyer_name'),
+  buyerEmailEnc: text('buyer_email_enc'),
+  buyerPhoneEnc: text('buyer_phone_enc'),
+  shipAddressEnc: text('ship_address_enc'),
   shipCity: text('ship_city'),
   shipNotes: text('ship_notes'),
   version: integer('version').notNull().default(1),
@@ -71,4 +71,60 @@ export const orderEvents = sqliteTable('order_events', {
   uniqueIndex('order_events_seq_uq').on(table.orderId, table.seq),
   check('order_events_actor_check', sql`${table.actorType} IN ${actorTypes}`.inlineParams()),
   check('order_events_type_check', sql`${table.type} IN ${orderEventTypes}`.inlineParams()),
+]);
+
+export const admins = sqliteTable('admins', {
+  id: text('id').primaryKey().notNull(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role', { enum: ['owner', 'agent'] }).notNull(),
+  totpSecret: text('totp_secret'),
+}, (table) => [
+  check('admins_role_check', sql`${table.role} IN ('owner', 'agent')`),
+]);
+
+export const auditLog = sqliteTable('audit_log', {
+  id: text('id').primaryKey().notNull(),
+  adminId: text('admin_id').references(() => admins.id, { onDelete: 'set null' }),
+  action: text('action').notNull(),
+  entity: text('entity').notNull(),
+  entityId: text('entity_id').notNull(),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status'),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  index('audit_log_entity_created_idx').on(table.entity, table.entityId, table.createdAt),
+]);
+
+export const conversations = sqliteTable('conversations', {
+  id: text('id').primaryKey().notNull(),
+  orderId: text('order_id').notNull().unique().references(() => orders.id, { onDelete: 'cascade' }),
+  telegramChatId: text('telegram_chat_id').notNull(),
+  telegramThreadId: integer('telegram_thread_id'),
+}, (table) => [
+  uniqueIndex('conversations_telegram_uq').on(table.telegramChatId, sql`COALESCE(${table.telegramThreadId}, 0)`),
+]);
+
+export const messages = sqliteTable('messages', {
+  id: text('id').primaryKey().notNull(),
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  channel: text('channel', { enum: ['web', 'telegram'] }).notNull(),
+  direction: text('direction', { enum: ['in', 'out'] }).notNull(),
+  telegramChatId: text('telegram_chat_id'),
+  externalId: text('external_id'),
+  body: text('body').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('messages_telegram_external_uq').on(table.telegramChatId, table.externalId),
+  index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+  check('messages_channel_check', sql`${table.channel} IN ('web', 'telegram')`),
+  check('messages_direction_check', sql`${table.direction} IN ('in', 'out')`),
+]);
+
+export const rateLimits = sqliteTable('rate_limits', {
+  key: text('key').primaryKey().notNull(),
+  windowStart: integer('window_start').notNull(),
+  count: integer('count').notNull(),
+}, (table) => [
+  check('rate_limits_count_check', sql`${table.count} BETWEEN 1 AND 10`),
 ]);

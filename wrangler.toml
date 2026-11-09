@@ -7,3 +7,14 @@ binding = "DB"
 database_name = "portofino-orders-local"
 database_id = "00000000-0000-0000-0000-000000000001"
 migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "ORDER_ROOMS"
+class_name = "OrderRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OrderRoom"]
+
+[triggers]
+crons = ["0 * * * *"]

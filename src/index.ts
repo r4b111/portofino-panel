@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import { handleError } from './lib/http';
 import type { AppEnv } from './lib/http';
+import { expireOrders } from './lib/orders/retention';
 import { adminRoutes } from './routes/admin';
+import { panelRoutes } from './routes/panel';
 import { publicRoutes } from './routes/public';
+import { telegramRoutes } from './routes/telegram';
 
 const app = new Hono<AppEnv>();
 
@@ -17,6 +20,13 @@ app.notFound((context) => context.json({
   error: { code: 'not_found', message: 'Ruta no encontrada' },
 }, 404));
 app.route('/', publicRoutes);
+app.route('/', telegramRoutes);
 app.route('/admin', adminRoutes);
+app.route('/', panelRoutes);
 
-export default app;
+export { OrderRoom } from './durable/order-room';
+export default Object.assign(app, {
+  scheduled(controller: ScheduledController, env: AppEnv['Bindings']) {
+    return expireOrders(env.DB, controller.scheduledTime);
+  },
+});

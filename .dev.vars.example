@@ -1,4 +1,5 @@
-# Secreto aleatorio para derivar la clave de cifrado de datos personales.
+# Genera valores aleatorios e independientes, por ejemplo con openssl rand -hex 32.
 DATA_SECRET=
-# Token Bearer de al menos 32 caracteres para las rutas administrativas.
-ADMIN_TOKEN=
+ADMIN_SESSION_SECRET=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_BOT_TOKEN=

@@ -1,0 +1,5 @@
+CREATE TABLE rate_limits (
+  key TEXT PRIMARY KEY NOT NULL,
+  window_start INTEGER NOT NULL,
+  count INTEGER NOT NULL CHECK (count BETWEEN 1 AND 10)
+);
