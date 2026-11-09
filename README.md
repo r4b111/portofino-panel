@@ -33,7 +33,7 @@ Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e indepen
 
 Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login`. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
 
-`PATCH /admin/orders/:number/status` recibe `{ "status": "..." }`. El mapa de transiciones está en `src/lib/orders/state.ts`. La cancelación exige el rol `owner`. Cada cambio válido y su registro en `audit_log` se guardan juntos y el cambio de versión protege contra escrituras concurrentes.
+`PATCH /admin/orders/:number/status` recibe `{ "status": "...", "expectedVersion": 1 }`. El mapa de transiciones está en `src/lib/orders/state.ts`. La cancelación exige el rol `owner`. Cada cambio válido y su registro en `audit_log` se guardan juntos y el cambio de versión protege contra escrituras concurrentes.
 
 ## Panel de pedidos
 
@@ -56,3 +56,8 @@ Aplica la migración `0003_telegram.sql` y configura `TELEGRAM_BOT_TOKEN` y `TEL
 El cliente vincula su pedido en un chat privado con el bot mediante `/start <token-de-seguimiento>`. Cada chat o tema queda asociado a un solo pedido. Los mensajes de texto recibidos aparecen en la conversación del panel. Las respuestas escritas por un agente en el panel se envían a Telegram cuando hay un chat vinculado y el bot está configurado.
 
 La cola persiste en el Durable Object del pedido. Tras el intento inicial, reintenta a los 1, 2 y 4 segundos. Telegram no ofrece una clave de idempotencia para `sendMessage`. Si acepta un envío y se pierde la respuesta antes de que el Worker registre su ID, un reintento podría generar una segunda entrega.
+
+
+Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.
+
+El cliente puede enviar mensajes con `POST /api/orders/messages`, el encabezado `X-Tracking-Token` y un cuerpo `{ "id": "<UUID>", "body": "..." }`. Se aceptan hasta 2000 caracteres y diez mensajes por código de seguimiento durante una ventana de un minuto. El límite se comparte con WebSocket. HTTP devuelve `429` y `Retry-After` en segundos. En WebSocket, el aviso equivalente lleva el tipo `rate_limited`.

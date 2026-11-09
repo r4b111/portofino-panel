@@ -14,7 +14,10 @@ const credentials = z.object({
   email: z.string().trim().max(254).email(),
   password: z.string().min(1).max(256),
 });
-const transition = z.object({ status: z.enum(orderStatuses) });
+const transition = z.object({
+  status: z.enum(orderStatuses),
+  expectedVersion: z.number().int().safe().positive(),
+});
 const ownerOnly = requireRole('owner');
 
 async function readJson(context: Context<AppEnv>): Promise<unknown> {
@@ -44,15 +47,14 @@ adminRoutes.get('/orders/:number', requireAgent, async (context) => {
 
 adminRoutes.patch('/orders/:number/status', requireAgent, async (context, next) => {
   const input = transition.safeParse(await readJson(context));
-  if (!input.success) throw new HttpError(400, 'invalid_status', 'Estado inválido');
-  context.set('targetStatus', input.data.status);
+  if (!input.success) throw new HttpError(400, 'invalid_status', 'Revisa el estado y la versión del pedido');
+  context.set('transitionDraft', input.data);
   if (input.data.status === 'cancelled') return ownerOnly(context, next);
   await next();
 }, async (context) => {
   const number = orderNumber.safeParse(context.req.param('number'));
   if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
-  const order = await transitionOrder(
-    context.env, number.data, context.get('targetStatus'), context.get('agent').id,
-  );
+  const { status, expectedVersion } = context.get('transitionDraft');
+  const order = await transitionOrder(context.env, number.data, status, context.get('agent').id, expectedVersion);
   return context.json({ order });
 });

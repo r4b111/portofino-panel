@@ -16,7 +16,7 @@ const chatScript = String.raw`
     packing: 'En preparación', shipped: 'Enviado', delivered: 'Entregado',
     cancelled: 'Cancelado', returned: 'Devuelto', expired: 'Vencido'
   };
-  let socket, timer, renewal;
+  let socket, timer, renewal, customerDraft;
   let generation = 0;
   let cursor = 0;
   let version = 0;
@@ -88,11 +88,40 @@ const chatScript = String.raw`
     }).catch(retry);
   }
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!socket || socket.readyState !== WebSocket.OPEN || submit.disabled || !input.value.trim()) return;
+    const body = input.value.trim();
+    if (!socket || socket.readyState !== WebSocket.OPEN || submit.disabled || !body) return;
+    if (access) {
+      const current = generation;
+      const original = input.value;
+      if (customerDraft?.body !== body) customerDraft = { id: crypto.randomUUID(), body };
+      submit.disabled = true;
+      try {
+        const response = await fetch('/api/orders/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Tracking-Token': trackingToken },
+          body: JSON.stringify(customerDraft)
+        });
+        if (current !== generation) return;
+        if (response.status === 429) {
+          indicator.textContent = 'Límite de mensajes alcanzado. Intenta en ' + response.headers.get('Retry-After') + ' s.';
+        } else if (response.ok) {
+          if (input.value === original) input.value = '';
+          customerDraft = undefined;
+          indicator.textContent = 'En línea';
+        } else {
+          indicator.textContent = 'No se pudo enviar el mensaje.';
+        }
+      } catch {
+        if (current === generation) indicator.textContent = 'Se interrumpió la conexión. Intenta de nuevo.';
+      } finally {
+        if (current === generation) submit.disabled = socket?.readyState !== WebSocket.OPEN;
+      }
+      return;
+    }
     const id = crypto.randomUUID();
-    const message = JSON.stringify({ type: 'message', id, body: input.value.trim() });
+    const message = JSON.stringify({ type: 'message', id, body });
     pending.set(id, message);
     socket.send(message);
     input.value = '';
@@ -107,6 +136,7 @@ const chatScript = String.raw`
     cursor = 0;
     version = 0;
     pending.clear();
+    customerDraft = undefined;
     feed.replaceChildren();
     state.textContent = 'Por consultar';
     connect(generation);

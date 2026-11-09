@@ -38,6 +38,7 @@ export async function findTrackingOrder(database: D1Database, token: string) {
 export async function findRealtimeOrder(database: D1Database, token: string) {
   const [order] = await drizzle(database).select({
     id: orders.id, expiresAt: orders.expiresAt, tokenExpiresAt: orders.tokenExpiresAt,
+    tokenHash: orders.trackingTokenHash,
   }).from(orders).where(await trackingCondition(token)).limit(1);
   return order;
 }
@@ -55,8 +56,11 @@ export async function findAdminOrder(database: D1Database, number: number) {
 
 export async function transitionOrder(
   env: AppEnv['Bindings'], identifier: number | string, to: OrderStatus, adminId: string,
-  expectedVersion?: number,
+  expectedVersion: number,
 ) {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new HttpError(400, 'invalid_version', 'Se requiere una versión válida del pedido');
+  }
   const database = env.DB;
   const [current] = await drizzle(database).select({
     id: orders.id, number: orders.number, status: orders.status, version: orders.version,
@@ -64,7 +68,7 @@ export async function transitionOrder(
     ? eq(orders.number, identifier)
     : eq(orders.id, identifier)).limit(1);
   if (!current) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
-  if (expectedVersion !== undefined && expectedVersion !== current.version) {
+  if (expectedVersion !== current.version) {
     throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
   }
   if (!allowedTransitions[current.status].includes(to)) {
@@ -74,9 +78,10 @@ export async function transitionOrder(
   const now = Date.now();
   const [updated] = await database.batch([
     database.prepare(`
-      UPDATE orders SET status = ?, version = version + 1, updated_at = ?
+      UPDATE orders SET status = ?, version = version + 1, updated_at = ?,
+        expires_at = CASE WHEN ? = 'confirmed' THEN NULL ELSE expires_at END
       WHERE id = ? AND version = ? AND status = ?
-    `).bind(to, now, current.id, current.version, current.status),
+    `).bind(to, now, to, current.id, expectedVersion, current.status),
     // The prior UPDATE and audit INSERT share the D1 transaction and connection.
     database.prepare(`
       INSERT INTO audit_log (id, admin_id, action, entity, entity_id, from_status, to_status, created_at)
@@ -121,7 +126,7 @@ export async function findPanelOrder(database: D1Database, id: string) {
   const db = drizzle(database);
   const [[order], items, events, audit] = await db.batch([
     db.select({
-      ...panelFields, version: orders.version, shipCity: orders.shipCity,
+      ...panelFields, version: orders.version, shipCity: orders.shipCity, anonymizedAt: orders.anonymizedAt,
     }).from(orders).where(eq(orders.id, id)).limit(1),
     db.select({
       id: orderItems.id, name: orderItems.productName, presentation: orderItems.presentation,

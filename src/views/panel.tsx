@@ -128,7 +128,7 @@ export function orderList(
       {rows.length ? <table>
         <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Subtotal</th><th>Fecha</th></tr></thead>
         <tbody>{rows.map((order) => <tr>
-          <td><a href={detailUrl(order.id)}>#{order.number}</a></td><td>{order.buyerName}</td>
+          <td><a href={detailUrl(order.id)}>#{order.number}</a></td><td>{order.buyerName ?? 'Datos anonimizados'}</td>
           <td>{statusLabels[order.status]}</td><td>{amount(order.subtotalAmount, order.currency)}</td>
           <td>{date(order.createdAt)}</td>
         </tr>)}</tbody>
@@ -155,7 +155,7 @@ export function orderDetail(
     <a href="/pedidos">← Volver a pedidos</a>
     <section class="card">
       <h2>{statusLabels[order.status]}</h2>
-      <p>{order.buyerName}{order.shipCity ? ' · ' + order.shipCity : ''}</p>
+      <p>{order.buyerName ?? 'Datos anonimizados'}{order.shipCity ? ' · ' + order.shipCity : ''}</p>
       <p>{paymentLabels[order.paymentStatus]} · Versión {order.version}</p>
       <p>Subtotal <strong>{amount(order.subtotalAmount, order.currency)}</strong></p>
       <p>Total <strong>{amount(order.totalAmount, order.currency)}</strong></p>
@@ -184,7 +184,8 @@ export function orderDetail(
           <td>{amount(item.lineAmount, order.currency)}</td></tr>)}</tbody>
       </table> : <p>Sin ítems registrados.</p>}
     </section>
-    <OrderChat ticketUrl={'/api/pedidos/' + encodeURIComponent(order.id) + '/realtime-token'} />
+    {order.anonymizedAt === null &&
+      <OrderChat ticketUrl={'/api/pedidos/' + encodeURIComponent(order.id) + '/realtime-token'} />}
     <section class="card"><h2>Historial</h2>
       {history.length ? <ol>{history.map((event) => <li>
         <strong>{Object.hasOwn(events, event.type) ? events[event.type] : 'Evento registrado'}</strong>

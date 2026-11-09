@@ -19,7 +19,6 @@ export interface AppEnv {
   };
   Variables: {
     agent: { id: string; role: 'owner' | 'agent'; expiresAt: number };
-    targetStatus: OrderStatus;
     transitionDraft: TransitionDraft;
   };
 }

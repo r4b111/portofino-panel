@@ -16,10 +16,10 @@ export const orders = sqliteTable('orders', {
   carrier: text('carrier'),
   totalAmount: integer('total_amount'),
   customerId: text('customer_id'),
-  buyerName: text('buyer_name').notNull(),
-  buyerEmailEnc: text('buyer_email_enc').notNull(),
-  buyerPhoneEnc: text('buyer_phone_enc').notNull(),
-  shipAddressEnc: text('ship_address_enc').notNull(),
+  buyerName: text('buyer_name'),
+  buyerEmailEnc: text('buyer_email_enc'),
+  buyerPhoneEnc: text('buyer_phone_enc'),
+  shipAddressEnc: text('ship_address_enc'),
   shipCity: text('ship_city'),
   shipNotes: text('ship_notes'),
   version: integer('version').notNull().default(1),
@@ -119,4 +119,12 @@ export const messages = sqliteTable('messages', {
   index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
   check('messages_channel_check', sql`${table.channel} IN ('web', 'telegram')`),
   check('messages_direction_check', sql`${table.direction} IN ('in', 'out')`),
+]);
+
+export const rateLimits = sqliteTable('rate_limits', {
+  key: text('key').primaryKey().notNull(),
+  windowStart: integer('window_start').notNull(),
+  count: integer('count').notNull(),
+}, (table) => [
+  check('rate_limits_count_check', sql`${table.count} BETWEEN 1 AND 10`),
 ]);

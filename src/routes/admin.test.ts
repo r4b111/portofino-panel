@@ -33,8 +33,8 @@ async function login(role: 'owner' | 'agent') {
   return { response, cookie, credential: cookie.split(';', 1)[0]! };
 }
 
-function changeStatus(status: string, cookie: string) {
-  return jsonRequest('/admin/orders/1/status', 'PATCH', { status }, cookie);
+function changeStatus(status: string, cookie: string, expectedVersion = 1) {
+  return jsonRequest('/admin/orders/1/status', 'PATCH', { status, expectedVersion }, cookie);
 }
 
 beforeAll(async () => {
@@ -85,13 +85,27 @@ describe('autenticación y transiciones administrativas', () => {
       BEGIN SELECT RAISE(ABORT, 'fallo de prueba'); END
     `).run();
     try {
-      expect((await changeStatus('packing', agent.credential)).status).toBe(500);
+      expect((await changeStatus('packing', agent.credential, 2)).status).toBe(500);
       expect(await db.prepare('SELECT status, version FROM orders').first())
         .toEqual({ status: 'confirmed', version: 2 });
       expect(await db.prepare('SELECT COUNT(*) AS total FROM audit_log').first('total')).toBe(1);
     } finally {
       await db.prepare('DROP TRIGGER reject_audit').run();
     }
+  });
+
+  it('exige versión, limpia el vencimiento al confirmar y descarta una versión anterior sin auditar', async () => {
+    const { credential } = await login('agent');
+    await db.prepare('UPDATE orders SET expires_at = ?').bind(Date.now() + 60_000).run();
+    const noVersion = await jsonRequest('/admin/orders/1/status', 'PATCH', { status: 'confirmed' }, credential);
+    expect(noVersion.status).toBe(400);
+    expect(await db.prepare('SELECT COUNT(*) AS total FROM audit_log').first('total')).toBe(0);
+    expect((await changeStatus('confirmed', credential)).status).toBe(200);
+    expect(await db.prepare('SELECT status, expires_at, version FROM orders').first())
+      .toEqual({ status: 'confirmed', expires_at: null, version: 2 });
+    expect((await changeStatus('packing', credential, 1)).status).toBe(409);
+    expect(await db.prepare('SELECT COUNT(*) AS total FROM audit_log').first('total')).toBe(1);
+    expect(await db.prepare('SELECT version FROM orders').first('version')).toBe(2);
   });
 
   it('rechaza contraseña incorrecta y cookie alterada', async () => {

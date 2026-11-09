@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { trackingTokenFormat } from '../durable/order-room';
+import type { Context } from 'hono';
+import { customerMessageSchema, trackingTokenFormat } from '../durable/order-room';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import { findRealtimeOrder, findTrackingOrder } from '../lib/orders/service';
@@ -19,15 +20,32 @@ publicRoutes.get('/orders/tracking', async (context) => {
   return context.json({ order });
 });
 
-publicRoutes.post('/api/orders/realtime-token', async (context) => {
+async function requireTrackingOrder(context: Context<AppEnv>) {
   const token = trackingTokenFormat.safeParse(context.req.header('X-Tracking-Token'));
   if (!token.success) throw new HttpError(401, 'invalid_token', 'Token de seguimiento inválido');
   const order = await findRealtimeOrder(context.env.DB, token.data);
   if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  return order;
+}
+
+publicRoutes.post('/api/orders/realtime-token', async (context) => {
+  const order = await requireTrackingOrder(context);
   const accessEndsAt = Math.min(order.tokenExpiresAt ?? Infinity, order.expiresAt ?? Infinity);
   return context.json(await context.env.ORDER_ROOMS.getByName(order.id).issueTicket(
-    order.id, 'customer', 'customer', Number.isFinite(accessEndsAt) ? accessEndsAt : undefined,
+    order.id, 'customer', 'customer:' + order.tokenHash, Number.isFinite(accessEndsAt) ? accessEndsAt : undefined,
   ));
+});
+
+publicRoutes.post('/api/orders/messages', async (context) => {
+  const order = await requireTrackingOrder(context);
+  const message = customerMessageSchema.safeParse(await context.req.json().catch(() => null));
+  if (!message.success) throw new HttpError(400, 'invalid_message', 'Mensaje inválido');
+  const result = await context.env.ORDER_ROOMS.getByName(order.id).postCustomerMessage(order.tokenHash, message.data);
+  if (result.status === 429) {
+    context.header('Retry-After', String(result.retryAfter));
+    return context.json({ error: { code: 'rate_limited', message: 'Límite de mensajes alcanzado' } }, 429);
+  }
+  return context.json({ ok: true }, result.status);
 });
 
 publicRoutes.get('/api/orders/:id/realtime', (context) => {

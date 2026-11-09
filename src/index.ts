@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { handleError } from './lib/http';
 import type { AppEnv } from './lib/http';
+import { expireOrders } from './lib/orders/retention';
 import { adminRoutes } from './routes/admin';
 import { panelRoutes } from './routes/panel';
 import { publicRoutes } from './routes/public';
@@ -24,4 +25,8 @@ app.route('/admin', adminRoutes);
 app.route('/', panelRoutes);
 
 export { OrderRoom } from './durable/order-room';
-export default app;
+export default Object.assign(app, {
+  scheduled(controller: ScheduledController, env: AppEnv['Bindings']) {
+    return expireOrders(env.DB, controller.scheduledTime);
+  },
+});

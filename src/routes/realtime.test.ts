@@ -131,7 +131,7 @@ describe('tiempo real del pedido', () => {
 
       const changed = await request('/admin/orders/1/status', {
         method: 'PATCH', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'confirmed' }),
+        body: JSON.stringify({ status: 'confirmed', expectedVersion: 1 }),
       });
       expect(changed.status).toBe(200);
       for (const connection of [panel, reopened, resumed]) {
@@ -141,6 +141,35 @@ describe('tiempo real del pedido', () => {
       }
     } finally {
       for (const socket of sockets.splice(0)) socket.close(1000);
+    }
+  });
+
+  it('aplica el mismo límite a WebSocket y HTTP y devuelve Retry-After en el mensaje 11', async () => {
+    await bindings.DB.prepare('DELETE FROM rate_limits').run();
+    const { socket, frames } = await connect(await customerTicket());
+    const send = (body: string, id = crypto.randomUUID()) => request('/api/orders/messages', {
+      method: 'POST', headers: { 'X-Tracking-Token': tracking, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, body }),
+    });
+    try {
+      const id = crypto.randomUUID();
+      socket.send(JSON.stringify({ type: 'message', id, body: 'Desde WebSocket' }));
+      await expect.poll(() => messages(frames).some((message) => message.id === id)).toBe(true);
+      expect((await send('Desde WebSocket', id)).status).toBe(200);
+      expect((await send('x'.repeat(2001))).status).toBe(400);
+
+      const replies = await Promise.all(Array.from({ length: 10 }, () => send('Desde HTTP')));
+      expect(replies.filter(({ status }) => status === 201)).toHaveLength(9);
+      const limited = replies.find(({ status }) => status === 429);
+      expect(limited).toBeDefined();
+      const retryAfter = Number(limited?.headers.get('Retry-After'));
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(60);
+
+      await bindings.DB.prepare('UPDATE rate_limits SET window_start = 0').run();
+      expect((await send('Ventana nueva')).status).toBe(201);
+    } finally {
+      for (const connection of sockets.splice(0)) connection.close(1000);
     }
   });
 

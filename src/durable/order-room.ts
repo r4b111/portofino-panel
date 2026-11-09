@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 import type { AppEnv } from '../lib/http';
+import { reserveCustomerMessage } from '../lib/orders/message-limit';
 import type { OrderStatus } from '../lib/orders/state';
 import { activeTelegramConversation, sendTelegramMessage, storeTelegramMessage } from '../lib/telegram';
 import type { TelegramMessage } from '../lib/telegram';
@@ -10,11 +11,11 @@ export const roomProtocol = 'portofino.v1';
 export const trackingTokenFormat = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const telegramRetryDelays = [1000, 2000, 4000] as const;
 const lifetimeMs = 5 * 60 * 1000;
-const messageSchema = z.object({
-  type: z.literal('message'),
+export const customerMessageSchema = z.object({
   id: z.string().uuid(),
-  body: z.string().trim().min(1).max(2000),
+  body: z.string().max(2000).trim().min(1),
 });
+const messageSchema = customerMessageSchema.extend({ type: z.literal('message') });
 
 export type RoomState = {
   status: OrderStatus;
@@ -157,9 +158,19 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
     }
 
     const { id, body } = message.data;
+    if (connection.role === 'customer') {
+      if (!connection.actorId.startsWith('customer:')) {
+        socket.close(4001, 'Vuelve a conectar');
+        return;
+      }
+      const result = await this.postCustomerMessage(connection.actorId.slice('customer:'.length), { id, body });
+      if (result.status === 429) this.send(socket, { type: 'rate_limited', id, ...result });
+      if (result.status === 200) this.send(socket, { type: 'ack', id });
+      return;
+    }
     const createdAt = Date.now();
     // Attachments created before Telegram was added have no orderId.
-    const conversation = connection.role === 'agent' && connection.orderId && this.env.TELEGRAM_BOT_TOKEN
+    const conversation = connection.orderId && this.env.TELEGRAM_BOT_TOKEN
       ? await activeTelegramConversation(this.env.DB, { orderId: connection.orderId })
       : null;
     if (connection.expiresAt <= Date.now()) {
@@ -186,6 +197,22 @@ export class OrderRoom extends DurableObject<AppEnv['Bindings']> {
       return;
     }
     this.send(socket, { type: 'ack', id });
+  }
+
+  postCustomerMessage(tokenHash: string, message: { id: string; body: string }) {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const duplicate = this.ctx.storage.sql.exec(
+        "SELECT id FROM messages WHERE actorId = 'customer' AND id = ?", message.id,
+      ).toArray().length > 0;
+      if (duplicate) return { status: 200 as const };
+
+      const reservation = await reserveCustomerMessage(this.env.DB, tokenHash);
+      if (!reservation.allowed) return { status: 429 as const, retryAfter: reservation.retryAfter };
+
+      const created = this.appendMessage({ ...message, createdAt: Date.now() }, 'customer', 'customer');
+      if (created) this.broadcast({ type: 'message', message: created });
+      return { status: 201 as const };
+    });
   }
 
   publishTelegramMessage(message: TelegramMessage) {
