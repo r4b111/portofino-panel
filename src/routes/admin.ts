@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { z } from 'zod';
-import { loginAgent, requireAgent, requireRole } from '../lib/auth';
+import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/auth';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import { findAdminOrder, transitionOrder } from '../lib/orders/service';
@@ -10,10 +10,6 @@ import { orderStatuses } from '../lib/orders/state';
 export const adminRoutes = new Hono<AppEnv>();
 const orderNumber = z.string().regex(/^[1-9][0-9]*$/).transform(Number)
   .refine(Number.isSafeInteger);
-const credentials = z.object({
-  email: z.string().trim().max(254).email(),
-  password: z.string().min(1).max(256),
-});
 const transition = z.object({
   status: z.enum(orderStatuses),
   expectedVersion: z.number().int().safe().positive(),
@@ -32,9 +28,9 @@ async function readJson(context: Context<AppEnv>): Promise<unknown> {
 }
 
 adminRoutes.post('/login', async (context) => {
-  const input = credentials.safeParse(await readJson(context));
+  const input = loginCredentials.safeParse(await readJson(context));
   if (!input.success) throw new HttpError(400, 'invalid_login', 'Revisa el correo y la contraseña');
-  return context.json(await loginAgent(context, input.data.email, input.data.password));
+  return context.json(await loginAgent(context, input.data.email, input.data.password, input.data.totp));
 });
 
 adminRoutes.get('/orders/:number', requireAgent, async (context) => {

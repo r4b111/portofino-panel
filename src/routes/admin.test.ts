@@ -6,7 +6,7 @@ import { env } from 'cloudflare:workers';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import type { AppEnv } from '../lib/http';
-import { hashPassword } from '../lib/passwords';
+import { hashPassword, verifyPassword } from '../lib/passwords';
 
 const bindings = env as AppEnv['Bindings'] & { TEST_MIGRATIONS: D1Migration[] };
 const testBindings = { ...bindings, ADMIN_SESSION_SECRET: 'firma exclusiva de prueba de más de 32 caracteres' };
@@ -14,9 +14,10 @@ const db = bindings.DB;
 const password = 'contraseña exclusiva de prueba';
 const eightHours = 8 * 60 * 60 * 1000;
 
-function jsonRequest(path: string, method: 'POST' | 'PATCH', body: unknown, cookie?: string) {
+function jsonRequest(path: string, method: 'POST' | 'PATCH', body: unknown, cookie?: string, ip?: string) {
   const headers = new Headers({ 'Content-Type': 'application/json' });
   if (cookie) headers.set('Cookie', cookie);
+  if (ip) headers.set('CF-Connecting-IP', ip);
   return app.request('https://portofino.example.test' + path, {
     method, headers, body: JSON.stringify(body),
   }, testBindings);
@@ -48,6 +49,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await db.batch([
     db.prepare('DELETE FROM audit_log'),
+    db.prepare('DELETE FROM rate_limits'),
     db.prepare('DELETE FROM orders'),
     db.prepare(`
       INSERT INTO orders (id, number, tracking_token_hash, buyer_name, buyer_email_enc,
@@ -116,6 +118,68 @@ describe('autenticación y transiciones administrativas', () => {
     expect(failed.headers.has('Set-Cookie')).toBe(false);
     const { credential } = await login('owner');
     expect((await changeStatus('confirmed', credential + 'x')).status).toBe(401);
+  });
+
+  it('exige TOTP, admite el paso anterior y rechaza reutilizar un código', async () => {
+    // RFC 6238 Appendix B gives 94287082 at t=59 for this SHA-1 secret.
+    const totpSecret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    await db.prepare("UPDATE admins SET totp_secret = ? WHERE id = 'agent'").bind(totpSecret).run();
+    vi.setSystemTime(new Date(89_000));
+    try {
+      const credentials = { email: 'agent@example.test', password };
+      const authenticate = (totp?: string) => jsonRequest('/admin/login', 'POST', { ...credentials, totp });
+      for (const totp of [undefined, '000000']) {
+        const rejected = await authenticate(totp);
+        expect(rejected.status).toBe(401);
+        expect(await rejected.json()).toMatchObject({ error: { code: 'totp_required' } });
+        expect(rejected.headers.has('Set-Cookie')).toBe(false);
+      }
+      const panel = await app.request('https://portofino.example.test/login', {
+        method: 'POST',
+        headers: { Origin: 'https://portofino.example.test' },
+        body: new URLSearchParams(credentials),
+      }, testBindings);
+      expect(panel.status).toBe(401);
+      expect(await panel.text()).toContain('data-error-code="totp_required"');
+      const allowed = await authenticate('287082');
+      expect(allowed.status).toBe(200);
+      const cookie = allowed.headers.get('Set-Cookie')?.split(';')[0];
+      if (!cookie) throw new Error('Falta la cookie de sesión');
+      const account = await app.request('/admin/orders/1', { headers: { Cookie: cookie } }, testBindings);
+      expect(account.status).toBe(200);
+      expect((await authenticate('287082')).status).toBe(401);
+    } finally {
+      vi.useRealTimers();
+      await db.prepare("UPDATE admins SET totp_secret = NULL WHERE id = 'agent'").run();
+    }
+  });
+
+  it.each(['email', 'IP'])('limita al sexto intento por %s aunque la otra clave cambie', async (dimension) => {
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const email = dimension === 'email' ? (attempt % 2 ? 'AGENT@example.test' : 'agent@example.test')
+        : 'intento' + attempt + '@example.test';
+      const ip = dimension === 'IP' ? '192.0.2.1' : '192.0.2.' + attempt;
+      const response = await jsonRequest('/admin/login', 'POST', { email, password: 'incorrecta' }, undefined, ip);
+      expect(response.status).toBe(attempt < 6 ? 401 : 429);
+    }
+  });
+
+  it('acepta el hash anterior y lo actualiza tras un inicio de sesión válido', async () => {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+    const salt = new Uint8Array(16);
+    const digest = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' }, key, 256,
+    );
+    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const legacy = ['pbkdf2-sha256', 100_000, '00'.repeat(16), hex].join('$');
+    await db.prepare("UPDATE admins SET password_hash = ? WHERE id = 'agent'").bind(legacy).run();
+
+    await login('agent');
+    const migrated = await db.prepare("SELECT password_hash FROM admins WHERE id = 'agent'")
+      .first<string>('password_hash');
+    expect(migrated?.split('$')[1]).toBe('600000');
+    await expect(verifyPassword(password, migrated ?? undefined)).resolves.toBe(true);
   });
 
   it('emite una cookie segura y rechaza su uso al cumplirse ocho horas', async () => {
