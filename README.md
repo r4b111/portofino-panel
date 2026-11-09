@@ -9,6 +9,7 @@ Requiere Node.js 22.12 o posterior.
 ```sh
 npm install --no-package-lock
 npm run typecheck
+npm test
 npm run db:local
 npm run dev
 ```
@@ -19,7 +20,7 @@ Wrangler crea la base local en `.wrangler/`. El identificador de base configurad
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Los pedidos de prueba deben cargarse por separado en D1. El andamiaje ofrece consultas de solo lectura. Vitest queda configurado y el árbol solicitado no incluye archivos de prueba.
+Los pedidos de prueba deben cargarse por separado en D1. El andamiaje ofrece consultas de solo lectura. Las pruebas de cifrado y tokens se ejecutan en el pool de Cloudflare Workers con `npm test`. Para ejecutar solo esas suites, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
