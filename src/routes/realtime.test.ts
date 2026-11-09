@@ -166,7 +166,8 @@ describe('tiempo real del pedido', () => {
       const replies = await Promise.all(Array.from({ length: 8 }, () => send('Desde HTTP')));
       expect(replies.map(({ status }) => status)).toEqual(Array(8).fill(201));
       expect(await counter()).toEqual({ count: 9, window_start: windowStart });
-      expect((await send('Mensaje 10')).status).toBe(201);
+      const fullMessage = 'x'.repeat(2000);
+      expect((await send('  ' + fullMessage + '  ')).status).toBe(201);
       const limited = await send('Mensaje 11');
       expect(limited.status).toBe(429);
       const retryAfter = Number(limited.headers.get('Retry-After'));
@@ -192,7 +193,7 @@ describe('tiempo real del pedido', () => {
       const history = messages(reopened.frames);
       expect(history.filter(({ id: messageId }) => messageId === id)).toHaveLength(1);
       expect(history.filter(({ body }) => body === 'Desde HTTP')).toHaveLength(8);
-      expect(history.filter(({ body }) => body === 'Mensaje 10')).toHaveLength(1);
+      expect(history.filter(({ body }) => body === fullMessage)).toHaveLength(1);
 
       await bindings.DB.prepare('UPDATE rate_limits SET window_start = 0').run();
       expect((await send('Ventana nueva')).status).toBe(201);
@@ -207,6 +208,51 @@ describe('tiempo real del pedido', () => {
     } finally {
       for (const connection of sockets.splice(0)) connection.close(1000);
     }
+  });
+
+  it('distingue el enlace caducado de un token inexistente', async () => {
+    const ticket = (token: string) => request('/api/orders/realtime-token', {
+      method: 'POST', headers: { 'X-Tracking-Token': token },
+    });
+    expect((await ticket(generateTrackingToken())).status).toBe(404);
+
+    const expiredToken = generateTrackingToken();
+    await bindings.DB.prepare(`
+      INSERT INTO orders (id, number, tracking_token_hash, buyer_name, buyer_email_enc,
+        buyer_phone_enc, ship_address_enc, created_at, updated_at, expires_at)
+      VALUES ('expired-link', 99, ?, 'Cliente de prueba', 'enc', 'enc', 'enc', 1, 1, 1)
+    `).bind(await hashTrackingToken(expiredToken)).run();
+    const expired = await ticket(expiredToken);
+    expect(expired.status).toBe(410);
+    expect(await expired.json()).toEqual({ error: { code: 'token_expired', message: 'El enlace caducó' } });
+  });
+
+  it('cachea solo el script público y restringe quién puede embeber el chat', async () => {
+    const script = await request('/pf-chat.js');
+    expect(script.headers.get('Content-Type')).toContain('text/javascript');
+    expect(script.headers.get('Cache-Control')).toBe('public, max-age=300');
+    expect(script.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(script.headers.get('X-Frame-Options')).toBe('DENY');
+    const tag = script.headers.get('ETag');
+    if (!tag) throw new Error('Falta el ETag del script');
+    const cached = await request('/pf-chat.js', { headers: { 'If-None-Match': tag } });
+    expect(cached.status).toBe(304);
+    expect(cached.headers.get('Cache-Control')).toBe('public, max-age=300');
+    expect(cached.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(await cached.text()).toBe('');
+
+    const chat = (storefrontOrigin: string) => app.request(origin + '/widgets/chat', undefined, {
+      ...bindings, STOREFRONT_ORIGIN: storefrontOrigin,
+    });
+    const allowed = await chat('https://tienda.example.test');
+    expect(allowed.headers.get('Content-Security-Policy')).toBe('frame-ancestors https://tienda.example.test');
+    expect(allowed.headers.has('X-Frame-Options')).toBe(false);
+    expect(allowed.headers.has('Access-Control-Allow-Origin')).toBe(false);
+    expect(allowed.headers.get('Cache-Control')).toBe('no-store');
+    expect((await chat('https://tienda.example.test; frame-ancestors *')).headers.get('Content-Security-Policy'))
+      .toBe("frame-ancestors 'none'");
+    expect((await request('/widgets/chat')).headers.get('Content-Security-Policy')).toBe("frame-ancestors 'none'");
+    expect((await request('/seguimiento')).headers.get('X-Frame-Options')).toBe('DENY');
   });
 
   it('rechaza el token efímero vencido y el acceso público sin credencial', async () => {

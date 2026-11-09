@@ -37,11 +37,17 @@ export async function findTrackingOrder(database: D1Database, token: string) {
 }
 
 export async function findRealtimeOrder(database: D1Database, token: string) {
+  const hash = await hashTrackingToken(token);
   const [order] = await drizzle(database).select({
     id: orders.id, expiresAt: orders.expiresAt, tokenExpiresAt: orders.tokenExpiresAt,
-    tokenHash: orders.trackingTokenHash,
-  }).from(orders).where(await trackingCondition(token)).limit(1);
-  return order;
+    tokenHash: orders.trackingTokenHash, anonymizedAt: orders.anonymizedAt, status: orders.status,
+  }).from(orders).where(eq(orders.trackingTokenHash, hash)).limit(1);
+  if (!order) return { kind: 'missing' as const };
+  const accessEndsAt = Math.min(order.tokenExpiresAt ?? Infinity, order.expiresAt ?? Infinity);
+  if (order.anonymizedAt !== null || order.status === 'expired' || accessEndsAt <= Date.now()) {
+    return { kind: 'expired' as const };
+  }
+  return { kind: 'active' as const, order, accessEndsAt };
 }
 
 export async function findAdminOrder(database: D1Database, number: number) {
