@@ -99,7 +99,7 @@ describe('panel de pedidos', () => {
     expect(second).toContain('href="/pedidos/order-1"');
   });
 
-  it('conserva el formulario de la segunda pestaña y devuelve 409', async () => {
+  it('devuelve 409 en la transición concurrente que pierde y conserva su formulario', async () => {
     const cookie = await login();
     const [firstTab, secondTab] = await Promise.all([
       get(detailPath, cookie).then((response) => response.text()),
@@ -111,18 +111,27 @@ describe('panel de pedidos', () => {
     const secondVersion = versionFrom(secondTab);
     expect(firstVersion).toBe(secondVersion);
 
-    const first = await post(detailPath, { status: 'confirmed', expectedVersion: firstVersion }, cookie);
-    expect(first.status).toBe(303);
-    const second = await post(detailPath, { status: 'cancelled', expectedVersion: secondVersion }, cookie);
-    expect(second.status).toBe(409);
-    const conflict = await second.text();
+    const [confirm, cancel] = await Promise.all([
+      post(detailPath, { status: 'confirmed', expectedVersion: firstVersion }, cookie),
+      post(detailPath, { status: 'cancelled', expectedVersion: secondVersion }, cookie),
+    ]);
+    expect([confirm.status, cancel.status].sort()).toEqual([303, 409]);
+    const confirmed = confirm.status === 303;
+    const savedStatus = confirmed ? 'confirmed' : 'cancelled';
+    const rejectedStatus = confirmed ? 'cancelled' : 'confirmed';
+    const conflict = await (confirmed ? cancel : confirm).text();
     expect(conflict).toContain('Otro agente lo modificó');
-    expect(conflict).toContain('name="status" value="cancelled"');
+    expect(conflict).toContain('name="status" value="' + rejectedStatus + '"');
     expect(versionFrom(conflict)).toBe(secondVersion);
-    expect(conflict).toContain('Cancelar pedido');
     expect(conflict).toContain('Estado actualizado');
     expect(await db.prepare('SELECT status, version FROM orders').first())
-      .toEqual({ status: 'confirmed', version: 2 });
-    expect(await db.prepare('SELECT COUNT(*) AS total FROM audit_log').first('total')).toBe(1);
+      .toEqual({ status: savedStatus, version: 2 });
+    const audit = await db.prepare(
+      'SELECT admin_id, entity_id, action, from_status, to_status FROM audit_log',
+    ).all();
+    expect(audit.results).toEqual([{
+      admin_id: 'owner', entity_id: 'order-1', action: 'status_changed',
+      from_status: 'pending_confirmation', to_status: savedStatus,
+    }]);
   });
 });

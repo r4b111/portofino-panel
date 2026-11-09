@@ -20,7 +20,7 @@ npm run dev
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **49 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
+Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **52 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -32,11 +32,28 @@ Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe repo
 
 Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e independientes de `DATA_SECRET`. Aprovisiona los administradores en D1 con un correo en minúsculas, un rol `owner` o `agent` y el resultado de `hashPassword` de `src/lib/passwords.ts` en `password_hash`. La función usa PBKDF2-SHA-256 con sal aleatoria y exactamente 100 000 iteraciones. Ese valor respeta el tope de PBKDF2 de WebCrypto en el runtime de Cloudflare Workers. [Límite de workerd](https://github.com/cloudflare/workerd/issues/1346)
 
-Si un administrador tiene un hash con otro número de iteraciones, aprovisiona un nuevo hash de 100 000 iteraciones mediante el restablecimiento de su contraseña. Para exigir segundo factor, configura `totp_secret` con el secreto Base32 de la aplicación de autenticación. Con NULL, la cuenta usa solo contraseña.
+Si un administrador tiene un hash con otro número de iteraciones, aprovisiona un nuevo hash de 100 000 iteraciones mediante el restablecimiento de su contraseña.
 
 Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login` y agrega `totp` como texto de seis dígitos cuando la cuenta lo requiera. El formulario de `/login` ofrece el mismo campo. Tras cinco intentos fallidos en un minuto por correo o por IP, las solicitudes siguientes devuelven `429` hasta que se abra una ventana nueva. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
 
 `PATCH /admin/orders/:number/status` recibe `{ "status": "...", "expectedVersion": 1 }`. El mapa de transiciones está en `src/lib/orders/state.ts`. La cancelación exige el rol `owner`. Cada cambio válido y su registro en `audit_log` se guardan juntos y el cambio de versión protege contra escrituras concurrentes.
+
+### Activar TOTP
+
+1. Genera un secreto Base32 de 32 caracteres en una terminal privada.
+
+   ```bash
+   node -e 'const {randomInt} = require("node:crypto"); const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; console.log(Array.from({length: 32}, () => alphabet[randomInt(alphabet.length)]).join(""));'
+   ```
+
+2. Añade el secreto manualmente en tu aplicación de autenticación como código basado en el tiempo. Configura SHA-1, seis dígitos y un intervalo de 30 segundos si la aplicación ofrece esos ajustes.
+3. En la consola de D1 del entorno correspondiente, guarda ese mismo secreto en `admins.totp_secret` para el correo de la cuenta. Sustituye los dos marcadores de esta sentencia y comprueba que se actualizó una fila.
+
+   ```sql
+   UPDATE admins SET totp_secret = 'SECRETO_BASE32' WHERE email = 'admin@example.com';
+   ```
+
+4. En una ventana privada, envía las credenciales correctas a `POST /admin/login` sin `totp` y comprueba que responde HTTP 401 con `totp_required`. Repite la solicitud con `totp` como texto de seis dígitos y comprueba que responde HTTP 200. También puedes verificarlo en `/login` con el campo de autenticación. Usa un código nuevo si ya lo utilizaste.
 
 ## Panel de pedidos
 

@@ -244,8 +244,10 @@ describe('tiempo real del pedido', () => {
     const chat = (storefrontOrigin: string) => app.request(origin + '/widgets/chat', undefined, {
       ...bindings, STOREFRONT_ORIGIN: storefrontOrigin,
     });
-    const allowed = await chat('https://tienda.example.test');
-    expect(allowed.headers.get('Content-Security-Policy')).toBe('frame-ancestors https://tienda.example.test');
+    const storefrontOrigin = 'https://tienda.example.test:8443';
+    const allowed = await chat(storefrontOrigin);
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers.get('Content-Security-Policy')).toBe('frame-ancestors ' + storefrontOrigin);
     expect(allowed.headers.has('X-Frame-Options')).toBe(false);
     expect(allowed.headers.has('Access-Control-Allow-Origin')).toBe(false);
     expect(allowed.headers.get('Cache-Control')).toBe('no-store');
