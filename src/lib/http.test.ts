@@ -4,10 +4,11 @@ import { handleError } from './http';
 import type { AppEnv } from './http';
 
 it('correlaciona la respuesta 500 con el mensaje y el stack registrados', async () => {
+  const message = 'Fallo inesperado: ' + 'x'.repeat(220);
   const app = new Hono<AppEnv>();
   app.onError(handleError);
   app.get('/pedidos/:token', () => {
-    throw new Error('D1 no devolvió el número del pedido');
+    throw new TypeError(message);
   });
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -20,8 +21,9 @@ it('correlaciona la respuesta 500 con el mensaje y el stack registrados', async 
       error: { code: 'internal_error', message: 'Error interno' },
       requestId,
     });
-    expect(log).toHaveBeenCalledWith('D1 no devolvió el número del pedido', {
+    expect(log).toHaveBeenCalledWith(message.slice(0, 200), {
       requestId,
+      name: 'TypeError',
       path: '/pedidos/:token',
       stack: expect.stringMatching(/at <origen>:\d+:\d+/),
     });
@@ -34,14 +36,14 @@ it('omite los datos que llegan en un mensaje de error desconocido', async () => 
   const app = new Hono<AppEnv>();
   app.onError(handleError);
   app.get('/pedidos/:token', () => {
-    throw new Error('Fallo para cliente@example.com');
+    throw new Error('Fallo para cliente@example.com con token-privado');
   });
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
   try {
     const response = await app.request('/pedidos/token-privado?email=cliente@example.com');
     expect(response.status).toBe(500);
-    expect(log).toHaveBeenCalledWith('Error no controlado', expect.any(Object));
+    expect(log).toHaveBeenCalledWith('Fallo para [correo omitido] con [omitido]', expect.any(Object));
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/cliente@example\.com|token-privado/);
   } finally {
     log.mockRestore();
