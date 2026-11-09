@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
 export type TelegramConversation = {
@@ -19,7 +20,7 @@ export async function verifyWebhookSecret(secret: string, received: string): Pro
     crypto.subtle.digest('SHA-256', encoder.encode(secret)),
     crypto.subtle.digest('SHA-256', encoder.encode(received)),
   ]);
-  return crypto.subtle.timingSafeEqual(expectedHash, receivedHash);
+  return timingSafeEqual(new Uint8Array(expectedHash), new Uint8Array(receivedHash));
 }
 
 export function activeTelegramConversation(

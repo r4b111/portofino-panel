@@ -9,6 +9,7 @@ Requiere Node.js 22.12 o posterior.
 ```sh
 npm install --no-package-lock
 npm run typecheck
+npm test
 npm run db:local
 npm run dev
 ```
@@ -19,7 +20,7 @@ Wrangler crea la base local en `.wrangler/`. El identificador de base configurad
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers.
+Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -29,9 +30,9 @@ Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers.
 
 ## Acceso administrativo
 
-Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e independientes de `DATA_SECRET`. Aprovisiona los administradores en D1 con un correo en minúsculas, un rol `owner` o `agent` y el resultado de `hashPassword` de `src/lib/passwords.ts` en `password_hash`. La función usa PBKDF2-SHA-256 con sal aleatoria. Deja `totp_secret` en NULL para cuentas con contraseña. Las cuentas con un secreto TOTP configurado quedan bloqueadas hasta que se implemente la verificación de segundo factor.
+Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e independientes de `DATA_SECRET`. Aprovisiona los administradores en D1 con un correo en minúsculas, un rol `owner` o `agent` y el resultado de `hashPassword` de `src/lib/passwords.ts` en `password_hash`. La función usa PBKDF2-SHA-256 con 600 000 iteraciones y sal aleatoria. Los hashes de 100 000 iteraciones se actualizan tras un inicio de sesión válido. Para exigir segundo factor, configura `totp_secret` con el secreto Base32 de la aplicación de autenticación. Con NULL, la cuenta usa solo contraseña.
 
-Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login`. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
+Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login` y agrega `totp` como texto de seis dígitos cuando la cuenta lo requiera. El formulario de `/login` ofrece el mismo campo. Tras cinco intentos fallidos en un minuto por correo o por IP, las solicitudes siguientes devuelven `429` hasta que se abra una ventana nueva. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
 
 `PATCH /admin/orders/:number/status` recibe `{ "status": "...", "expectedVersion": 1 }`. El mapa de transiciones está en `src/lib/orders/state.ts`. La cancelación exige el rol `owner`. Cada cambio válido y su registro en `audit_log` se guardan juntos y el cambio de versión protege contra escrituras concurrentes.
 
@@ -58,14 +59,12 @@ El cliente vincula su pedido en un chat privado con el bot mediante `/start <tok
 La cola persiste en el Durable Object del pedido. Tras el intento inicial, reintenta a los 1, 2 y 4 segundos. Telegram no ofrece una clave de idempotencia para `sendMessage`. Si acepta un envío y se pierde la respuesta antes de que el Worker registre su ID, un reintento podría generar una segunda entrega.
 
 
-Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.
-
 El cliente puede enviar mensajes con `POST /api/orders/messages`, el encabezado `X-Tracking-Token` y un cuerpo `{ "id": "<UUID>", "body": "..." }`. Se aceptan hasta 2000 caracteres y diez mensajes por código de seguimiento durante una ventana de un minuto. El límite se comparte con WebSocket. HTTP devuelve `429` y `Retry-After` en segundos. En WebSocket, el aviso equivalente lleva el tipo `rate_limited`.
 
 
 ## Alta de pedidos
 
-`POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0007_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
+`POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0006_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
 
 La respuesta `201` entrega `{ number, token, expiresAt }`. Guarda el token en el cliente al recibirlo. El pedido pendiente vence a las 72 horas. Si se confirma, se elimina ese vencimiento y el código de seguimiento sigue funcionando.
 
@@ -79,3 +78,10 @@ Carga el script clásico del Worker en la página privada del pedido y asigna al
 ```
 
 Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Worker en `script-src` y `frame-src`. Al abrir la conversación tras recargar, el widget recupera el estado y el historial del pedido. Si se interrumpe la conexión, reintenta con pausas crecientes de hasta 30 segundos. Si se alcanza el límite de envío, muestra un aviso y conserva el borrador.
+
+
+## Retención de pedidos
+
+Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.
+
+La migración `0004_order_retention.sql` conserva los datos existentes al convertir cuatro columnas obligatorias en columnas que admiten `NULL`. Cuando vence un pedido elegible, el cron elimina el nombre, correo, teléfono, dirección y notas de envío. Conserva el número, la ciudad, los importes y los ítems. La actualización y el evento de sistema sin datos personales se guardan juntos. Repetir el cron conserva un único evento de anonimización por pedido.

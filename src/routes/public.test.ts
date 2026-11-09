@@ -3,10 +3,11 @@
 import { applyD1Migrations } from 'cloudflare:test';
 import type { D1Migration } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import { decrypt } from '../lib/crypto';
 import type { AppEnv } from '../lib/http';
+import { createOrder } from '../lib/orders/service';
 import { hashTrackingToken } from '../lib/tokens';
 
 const testEnv = env as AppEnv['Bindings'] & { TEST_MIGRATIONS: D1Migration[] };
@@ -53,12 +54,16 @@ describe('POST /api/orders', () => {
     });
     expect(response.status).toBe(201);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    const created = await response.json<{ number: number; token: string; expiresAt: number }>();
+    const created = await response.clone().json<{ number: number; token: string; expiresAt: number }>();
     expect(created).toEqual({
       number: expect.any(Number),
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       expiresAt: expect.any(Number),
     });
+    const responseBody = await response.text();
+    for (const personalValue of [payload.name, payload.email, payload.phone, payload.address, payload.city]) {
+      expect(responseBody).not.toContain(personalValue);
+    }
     const lifetime = 72 * 60 * 60 * 1000;
     expect(created.expiresAt).toBeGreaterThanOrEqual(startedAt + lifetime);
     expect(created.expiresAt).toBeLessThanOrEqual(Date.now() + lifetime);
@@ -112,6 +117,54 @@ describe('POST /api/orders', () => {
   it('rechaza un email inválido antes de escribir', async () => {
     expect((await postOrder({ ...payload, email: 'correo-invalido' })).status).toBe(400);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM orders').first('count')).toBe(0);
+  });
+
+  it('rechaza un productId inexistente con 400 y no guarda un pedido parcial', async () => {
+    const response = await postOrder({
+      ...payload,
+      items: [item, { ...item, productId: 'producto-inexistente' }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: 'unknown_product' } });
+    for (const table of ['orders', 'order_items', 'order_events']) {
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM ' + table).first('count')).toBe(0);
+    }
+  });
+
+  it('asigna números distintos a dos altas simultáneas en la misma base', async () => {
+    const [first, second] = await Promise.all([
+      createOrder(db, secret, payload),
+      createOrder(db, secret, payload),
+    ]);
+    expect(first.number).not.toBe(second.number);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM orders').first('count')).toBe(2);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM order_events WHERE type = 'created'").first('count')).toBe(2);
+  });
+
+  it('reintenta colisiones de número que D1 reporta directamente o como causa', async () => {
+    const batch = vi.spyOn(db, 'batch')
+      .mockRejectedValueOnce(new Error('orders_number_uq'))
+      .mockRejectedValueOnce(new Error('D1_ERROR', { cause: new Error('UNIQUE constraint failed: orders.number') }));
+    try {
+      await expect(createOrder(db, secret, payload)).resolves.toHaveProperty('number');
+      expect(batch).toHaveBeenCalledTimes(3);
+    } finally {
+      batch.mockRestore();
+    }
+  });
+
+  it.each([
+    { message: 'UNIQUE constraint failed: orders.number', attempts: 3 },
+    { message: 'UNIQUE constraint failed: orders.tracking_token_hash', attempts: 1 },
+  ])('propaga $message después de $attempts intento(s)', async ({ message, attempts }) => {
+    const failure = new Error(message);
+    const batch = vi.spyOn(db, 'batch').mockRejectedValue(failure);
+    try {
+      await expect(createOrder(db, secret, payload)).rejects.toBe(failure);
+      expect(batch).toHaveBeenCalledTimes(attempts);
+    } finally {
+      batch.mockRestore();
+    }
   });
 
   it('revierte el pedido y sus ítems si falla la escritura del evento', async () => {

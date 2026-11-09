@@ -158,13 +158,21 @@ describe('tiempo real del pedido', () => {
       expect((await send('Desde WebSocket', id)).status).toBe(200);
       expect((await send('x'.repeat(2001))).status).toBe(400);
 
-      const replies = await Promise.all(Array.from({ length: 10 }, () => send('Desde HTTP')));
-      expect(replies.filter(({ status }) => status === 201)).toHaveLength(9);
-      const limited = replies.find(({ status }) => status === 429);
-      expect(limited).toBeDefined();
-      const retryAfter = Number(limited?.headers.get('Retry-After'));
+      const counter = () => bindings.DB.prepare('SELECT count, window_start FROM rate_limits')
+        .first<{ count: number; window_start: number }>();
+      const windowStart = Date.now() - 55_000;
+      await bindings.DB.prepare('UPDATE rate_limits SET window_start = ?').bind(windowStart).run();
+
+      const replies = await Promise.all(Array.from({ length: 8 }, () => send('Desde HTTP')));
+      expect(replies.map(({ status }) => status)).toEqual(Array(8).fill(201));
+      expect(await counter()).toEqual({ count: 9, window_start: windowStart });
+      expect((await send('Mensaje 10')).status).toBe(201);
+      const limited = await send('Mensaje 11');
+      expect(limited.status).toBe(429);
+      const retryAfter = Number(limited.headers.get('Retry-After'));
       expect(retryAfter).toBeGreaterThan(0);
-      expect(retryAfter).toBeLessThanOrEqual(60);
+      expect(retryAfter).toBeLessThanOrEqual(5);
+      expect(await counter()).toEqual({ count: 10, window_start: windowStart });
 
       const page = await request('/widgets/chat');
       expect(page.status).toBe(200);
@@ -183,10 +191,19 @@ describe('tiempo real del pedido', () => {
         .toEqual(frames.find(({ type }) => type === 'status'));
       const history = messages(reopened.frames);
       expect(history.filter(({ id: messageId }) => messageId === id)).toHaveLength(1);
-      expect(history.filter(({ body }) => body === 'Desde HTTP')).toHaveLength(9);
+      expect(history.filter(({ body }) => body === 'Desde HTTP')).toHaveLength(8);
+      expect(history.filter(({ body }) => body === 'Mensaje 10')).toHaveLength(1);
 
       await bindings.DB.prepare('UPDATE rate_limits SET window_start = 0').run();
       expect((await send('Ventana nueva')).status).toBe(201);
+      const next = await counter();
+      expect(next).toMatchObject({ count: 1 });
+      expect(next?.window_start).toBeGreaterThan(windowStart);
+
+      const burst = await Promise.all(Array.from({ length: 12 }, () => send('Desde HTTP')));
+      expect(burst.filter(({ status }) => status === 201)).toHaveLength(9);
+      expect(burst.filter(({ status }) => status === 429)).toHaveLength(3);
+      expect(await counter()).toEqual({ count: 10, window_start: next?.window_start });
     } finally {
       for (const connection of sockets.splice(0)) connection.close(1000);
     }
