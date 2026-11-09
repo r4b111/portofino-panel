@@ -30,7 +30,9 @@ Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe repo
 
 ## Acceso administrativo
 
-Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e independientes de `DATA_SECRET`. Aprovisiona los administradores en D1 con un correo en minúsculas, un rol `owner` o `agent` y el resultado de `hashPassword` de `src/lib/passwords.ts` en `password_hash`. La función usa PBKDF2-SHA-256 con 600 000 iteraciones y sal aleatoria. Los hashes de 100 000 iteraciones se actualizan tras un inicio de sesión válido. Para exigir segundo factor, configura `totp_secret` con el secreto Base32 de la aplicación de autenticación. Con NULL, la cuenta usa solo contraseña.
+Configura `ADMIN_SESSION_SECRET` con al menos 32 caracteres aleatorios e independientes de `DATA_SECRET`. Aprovisiona los administradores en D1 con un correo en minúsculas, un rol `owner` o `agent` y el resultado de `hashPassword` de `src/lib/passwords.ts` en `password_hash`. La función usa PBKDF2-SHA-256 con sal aleatoria y exactamente 100 000 iteraciones. Ese valor respeta el tope de PBKDF2 de WebCrypto en el runtime de Cloudflare Workers. [Límite de workerd](https://github.com/cloudflare/workerd/issues/1346)
+
+Si un administrador tiene un hash con otro número de iteraciones, aprovisiona un nuevo hash de 100 000 iteraciones mediante el restablecimiento de su contraseña. Para exigir segundo factor, configura `totp_secret` con el secreto Base32 de la aplicación de autenticación. Con NULL, la cuenta usa solo contraseña.
 
 Envía `{ "email": "...", "password": "..." }` como JSON a `POST /admin/login` y agrega `totp` como texto de seis dígitos cuando la cuenta lo requiera. El formulario de `/login` ofrece el mismo campo. Tras cinco intentos fallidos en un minuto por correo o por IP, las solicitudes siguientes devuelven `429` hasta que se abra una ventana nueva. La sesión se entrega en una cookie firmada `__Host-admin_session` con `HttpOnly`, `Secure` y `SameSite=Strict`. Vence a las ocho horas. El servidor consulta el rol vigente al autenticar cada solicitud.
 

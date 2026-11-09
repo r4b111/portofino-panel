@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import type { Context, MiddlewareHandler } from 'hono';
 import { getSignedCookie, setSignedCookie } from 'hono/cookie';
@@ -7,7 +7,7 @@ import { admins } from '../db/schema';
 import { HttpError } from './errors';
 import type { AppEnv } from './http';
 import { loginIsLimited, loginLimitKeys, recordLoginFailure } from './login-limit';
-import { hashPassword, verifyPassword } from './passwords';
+import { verifyPassword } from './passwords';
 import { matchingTotpStep } from './totp';
 
 export const loginCredentials = z.object({
@@ -59,11 +59,6 @@ export async function loginAgent(context: Context<AppEnv>, email: string, passwo
     if (accepted.meta.changes !== 1) {
       return rejectLogin('totp_required', 'Ingresa un código de autenticación válido');
     }
-  }
-
-  if (admin.passwordHash.startsWith('pbkdf2-sha256$100000$')) {
-    await db.update(admins).set({ passwordHash: await hashPassword(password) })
-      .where(and(eq(admins.id, admin.id), eq(admins.passwordHash, admin.passwordHash)));
   }
 
   const expiresAt = Date.now() + sessionSeconds * 1000;
