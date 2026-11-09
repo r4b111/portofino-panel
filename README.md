@@ -9,6 +9,7 @@ Requiere Node.js 22.12 o posterior.
 ```sh
 npm install --no-package-lock
 npm run typecheck
+npm test
 npm run db:local
 npm run dev
 ```
@@ -19,7 +20,7 @@ Wrangler crea la base local en `.wrangler/`. El identificador de base configurad
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers.
+Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
