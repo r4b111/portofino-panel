@@ -26,12 +26,16 @@ it('anonimiza un pedido vencido una sola vez y conserva su número e ítems en e
       'nota privada', 'Medellín', 25000, 5000, 30000, 1, 1, ?)
   `);
   const password = 'contraseña de prueba';
+  const terminalStatuses = ['delivered', 'cancelled', 'returned', 'expired'];
   await DB.batch([
     createOrder.bind('due', 712, 'hash-due', cutoff),
     createOrder.bind('future', 713, 'hash-future', cutoff + 1),
     createOrder.bind('no-expiry', 714, 'hash-no-expiry', null),
-    createOrder.bind('delivered', 715, 'hash-delivered', cutoff - 1),
-    DB.prepare("UPDATE orders SET status = 'delivered' WHERE id = 'delivered'"),
+    ...terminalStatuses.flatMap((status, index) => [
+      createOrder.bind(status, 715 + index, 'hash-' + status, cutoff - 1),
+      DB.prepare("UPDATE orders SET status = ?, buyer_name = 'Cliente terminal de prueba' WHERE id = ?")
+        .bind(status, status),
+    ]),
     DB.prepare(`
       INSERT INTO order_items (id, order_id, product_name, presentation, qty, unit_amount, line_amount)
       VALUES ('item', 'due', 'Perfume de prueba', '50 ml', 1, 25000, 25000)
@@ -67,15 +71,21 @@ it('anonimiza un pedido vencido una sola vez y conserva su número e ítems en e
     ship_city: 'Medellín', subtotal_amount: 25000, shipping_cost: 5000, total_amount: 30000,
   });
   const untouched = await DB.prepare(`
-    SELECT status, buyer_name, anonymized_at FROM orders WHERE id NOT IN ('due', 'delivered') ORDER BY number
+    SELECT status, buyer_name, anonymized_at FROM orders WHERE id IN ('future', 'no-expiry') ORDER BY number
   `).all();
   expect(untouched.results).toEqual(Array.from({ length: 2 }, () => ({
     status: 'confirmed', buyer_name: 'Nombre privado', anonymized_at: null,
   })));
-  expect(await DB.prepare("SELECT status, anonymized_at, version FROM orders WHERE id = 'delivered'").first())
-    .toEqual({ status: 'delivered', anonymized_at: null, version: 1 });
-  expect(await DB.prepare("SELECT COUNT(*) AS total FROM order_events WHERE order_id = 'delivered'").first('total'))
-    .toBe(0);
+  const terminal = await DB.prepare(`
+    SELECT status, buyer_name, anonymized_at, version FROM orders WHERE number >= 715 ORDER BY number
+  `).all();
+  expect(terminal.results).toEqual(terminalStatuses.map((status) => ({
+    status, buyer_name: 'Cliente terminal de prueba', anonymized_at: null, version: 1,
+  })));
+  expect(await DB.prepare(`
+    SELECT COUNT(*) AS total FROM order_events JOIN orders ON orders.id = order_events.order_id
+    WHERE orders.number >= 715
+  `).first('total')).toBe(0);
   const history = await DB.prepare(`
     SELECT seq, actor_type, type, from_status, to_status, payload FROM order_events
     WHERE order_id = 'due' ORDER BY seq
