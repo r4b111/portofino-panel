@@ -54,12 +54,16 @@ describe('POST /api/orders', () => {
     });
     expect(response.status).toBe(201);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    const created = await response.json<{ number: number; token: string; expiresAt: number }>();
+    const created = await response.clone().json<{ number: number; token: string; expiresAt: number }>();
     expect(created).toEqual({
       number: expect.any(Number),
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       expiresAt: expect.any(Number),
     });
+    const responseBody = await response.text();
+    for (const personalValue of [payload.name, payload.email, payload.phone, payload.address, payload.city]) {
+      expect(responseBody).not.toContain(personalValue);
+    }
     const lifetime = 72 * 60 * 60 * 1000;
     expect(created.expiresAt).toBeGreaterThanOrEqual(startedAt + lifetime);
     expect(created.expiresAt).toBeLessThanOrEqual(Date.now() + lifetime);
@@ -113,6 +117,18 @@ describe('POST /api/orders', () => {
   it('rechaza un email inválido antes de escribir', async () => {
     expect((await postOrder({ ...payload, email: 'correo-invalido' })).status).toBe(400);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM orders').first('count')).toBe(0);
+  });
+
+  it('rechaza un productId inexistente con 400 y no guarda un pedido parcial', async () => {
+    const response = await postOrder({
+      ...payload,
+      items: [item, { ...item, productId: 'producto-inexistente' }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: 'unknown_product' } });
+    for (const table of ['orders', 'order_items', 'order_events']) {
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM ' + table).first('count')).toBe(0);
+    }
   });
 
   it('asigna números distintos a dos altas simultáneas en la misma base', async () => {
