@@ -1,4 +1,4 @@
-name = "portofino-orders"
+name = "portofino-orders-prod"
 main = "src/index.ts"
 compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
@@ -21,13 +21,20 @@ new_sqlite_classes = ["OrderRoom"]
 crons = ["0 * * * *"]
 
 [vars]
-STOREFRONT_ORIGIN = ""
+STOREFRONT_ORIGIN = "https://claro-panel-educativo-e41.r4b111.chatgpt.site"
 
 [env.production]
 name = "portofino-orders"
 
+[env.production.triggers]
+crons = ["0 * * * *"]
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["OrderRoom"]
+
 [env.production.vars]
-STOREFRONT_ORIGIN = ""
+STOREFRONT_ORIGIN = "https://claro-panel-educativo-e41.r4b111.chatgpt.site"
 
 [[env.production.d1_databases]]
 binding = "DB"

@@ -14,7 +14,7 @@ npm run db:local
 npm run dev
 ```
 
-Wrangler crea la base local en `.wrangler/`. El identificador de base configurado es para desarrollo local. Para probar autenticación, copia `.dev.vars.example` a `.dev.vars` y genera un valor aleatorio e independiente para cada variable. Guarda las claves fuera de Git.
+`npm run dev` y `npm run db:local` usan exclusivamente el entorno local. Wrangler crea la base local en `.wrangler/`. Para producción, usa siempre `--env production`. Para probar autenticación, copia `.dev.vars.example` a `.dev.vars` y genera un valor aleatorio e independiente para cada variable. Guarda las claves fuera de Git.
 
 - `GET /health` comprueba que el Worker responde.
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
@@ -88,9 +88,9 @@ La migración `0004_order_retention.sql` conserva los datos existentes al conver
 
 ## Despliegue y rotación de secretos
 
-El entorno `production` de Wrangler usa el binding `DB` de la base `portofino` con `database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"`. Configura `STOREFRONT_ORIGIN` en `[env.production.vars]` con el origen HTTPS exacto de la tienda, sin rutas. Si falta o es inválido, el navegador bloquea la carga del chat dentro de un iframe.
+El entorno `production` de Wrangler usa el binding `DB` de la base `portofino` con `database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"`. El valor de `STOREFRONT_ORIGIN` en `[env.production.vars]` autoriza el origen HTTPS de la tienda. Si falta o es inválido, el navegador bloquea la carga del chat dentro de un iframe.
 
-Antes de publicar, revisa el historial con `npx wrangler d1 migrations list DB --remote --env production`. Producción ya aplicó hasta `0005_shipping_total.sql`. Los nombres siguientes son `0007_rate_limits.sql` y `0008_order_catalog.sql`. Aplica las migraciones pendientes con `npx wrangler d1 migrations apply DB --remote --env production` y publica con `npx wrangler deploy --env production`.
+Antes de publicar, revisa el historial con `npx wrangler d1 migrations list DB --remote --env production`. Producción ya aplicó hasta `0005_shipping_total.sql`. Los nombres siguientes son `0007_rate_limits.sql` y `0008_order_catalog.sql`. Aplica las migraciones pendientes con `npx wrangler d1 migrations apply DB --remote --env production`. Publica producción siempre con `npx wrangler deploy --env production`. Si ejecutas `npx wrangler deploy` sin ese flag, Wrangler usa la configuración raíz y puede sobrescribir el Worker `portofino-orders-prod` con la configuración local. El Worker de producción se llama `portofino-orders`.
 
 - Rota `ADMIN_SESSION_SECRET` con `npx wrangler secret put ADMIN_SESSION_SECRET --env production`. Las sesiones previas deberán volver a autenticarse.
 - Si cambias `TELEGRAM_BOT_TOKEN` o `TELEGRAM_WEBHOOK_SECRET`, actualiza los secretos en el Worker y registra de nuevo el webhook de Telegram con el valor correspondiente de `secret_token`.

@@ -251,7 +251,7 @@ describe('tiempo real del pedido', () => {
     expect(allowed.headers.get('Cache-Control')).toBe('no-store');
     expect((await chat('https://tienda.example.test; frame-ancestors *')).headers.get('Content-Security-Policy'))
       .toBe("frame-ancestors 'none'");
-    expect((await request('/widgets/chat')).headers.get('Content-Security-Policy')).toBe("frame-ancestors 'none'");
+    expect((await chat('')).headers.get('Content-Security-Policy')).toBe("frame-ancestors 'none'");
     expect((await request('/seguimiento')).headers.get('X-Frame-Options')).toBe('DENY');
   });
 
