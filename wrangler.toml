@@ -3,9 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
 
-[vars]
-STOREFRONT_ORIGIN = "https://claro-panel-educativo-e41.r4b111.chatgpt.site"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "portofino-orders-local"
@@ -22,6 +19,9 @@ new_sqlite_classes = ["OrderRoom"]
 
 [triggers]
 crons = ["0 * * * *"]
+
+[vars]
+STOREFRONT_ORIGIN = "https://claro-panel-educativo-e41.r4b111.chatgpt.site"
 
 [env.production]
 name = "portofino-orders"
