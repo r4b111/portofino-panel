@@ -19,7 +19,7 @@ Wrangler crea la base local en `.wrangler/`. El identificador de base configurad
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Los pedidos de prueba deben cargarse por separado en D1. El andamiaje ofrece consultas de solo lectura. Vitest queda configurado y el árbol solicitado no incluye archivos de prueba.
+Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers.
 
 ## Criptografía
 
@@ -61,3 +61,10 @@ La cola persiste en el Durable Object del pedido. Tras el intento inicial, reint
 Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.
 
 El cliente puede enviar mensajes con `POST /api/orders/messages`, el encabezado `X-Tracking-Token` y un cuerpo `{ "id": "<UUID>", "body": "..." }`. Se aceptan hasta 2000 caracteres y diez mensajes por código de seguimiento durante una ventana de un minuto. El límite se comparte con WebSocket. HTTP devuelve `429` y `Retry-After` en segundos. En WebSocket, el aviso equivalente lleva el tipo `rate_limited`.
+
+
+## Alta de pedidos
+
+`POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0007_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
+
+La respuesta `201` entrega `{ number, token, expiresAt }`. Guarda el token en el cliente al recibirlo. El pedido pendiente vence a las 72 horas. Si se confirma, se elimina ese vencimiento y el código de seguimiento sigue funcionando.
