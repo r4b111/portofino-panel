@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { etag, RETAINED_304_HEADERS } from 'hono/etag';
 import { z } from 'zod';
 import { customerMessageSchema, trackingTokenFormat } from '../durable/order-room';
 import { HttpError } from '../lib/errors';
@@ -12,10 +13,29 @@ export const publicRoutes = new Hono<AppEnv>();
 
 publicRoutes.get('/seguimiento', (context) => context.html(trackingPage()));
 
-publicRoutes.get('/pf-chat.js', (context) =>
-  context.body(widgetScript, 200, { 'Content-Type': 'text/javascript; charset=UTF-8' }));
+const widgetEtag = etag({
+  retainedHeaders: [...RETAINED_304_HEADERS, 'access-control-allow-origin', 'x-frame-options', 'x-content-type-options'],
+});
 
-publicRoutes.get('/widgets/chat', (context) => context.html(trackingPage(true)));
+publicRoutes.get('/pf-chat.js', widgetEtag, (context) => context.body(widgetScript, 200, {
+  'Content-Type': 'text/javascript; charset=UTF-8',
+  'Cache-Control': 'public, max-age=300',
+  'Access-Control-Allow-Origin': '*',
+}));
+
+function frameAncestor(value: string | undefined): string {
+  if (!value || !/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?\/?$/i.test(value)) return "'none'";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "'none'";
+  }
+}
+
+publicRoutes.get('/widgets/chat', (context) => {
+  context.header('Content-Security-Policy', 'frame-ancestors ' + frameAncestor(context.env.STOREFRONT_ORIGIN));
+  return context.html(trackingPage(true));
+});
 
 publicRoutes.get('/health', (context) => context.json({ ok: true }));
 
@@ -30,21 +50,21 @@ publicRoutes.get('/orders/tracking', async (context) => {
 async function requireTrackingOrder(context: Context<AppEnv>) {
   const token = trackingTokenFormat.safeParse(context.req.header('X-Tracking-Token'));
   if (!token.success) throw new HttpError(401, 'invalid_token', 'Token de seguimiento inválido');
-  const order = await findRealtimeOrder(context.env.DB, token.data);
-  if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
-  return order;
+  const result = await findRealtimeOrder(context.env.DB, token.data);
+  if (result.kind === 'missing') throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  if (result.kind === 'expired') throw new HttpError(410, 'token_expired', 'El enlace caducó');
+  return result;
 }
 
 publicRoutes.post('/api/orders/realtime-token', async (context) => {
-  const order = await requireTrackingOrder(context);
-  const accessEndsAt = Math.min(order.tokenExpiresAt ?? Infinity, order.expiresAt ?? Infinity);
+  const { order, accessEndsAt } = await requireTrackingOrder(context);
   return context.json(await context.env.ORDER_ROOMS.getByName(order.id).issueTicket(
     order.id, 'customer', 'customer:' + order.tokenHash, Number.isFinite(accessEndsAt) ? accessEndsAt : undefined,
   ));
 });
 
 publicRoutes.post('/api/orders/messages', async (context) => {
-  const order = await requireTrackingOrder(context);
+  const { order } = await requireTrackingOrder(context);
   const message = customerMessageSchema.safeParse(await context.req.json().catch(() => null));
   if (!message.success) throw new HttpError(400, 'invalid_message', 'Mensaje inválido');
   const result = await context.env.ORDER_ROOMS.getByName(order.id).postCustomerMessage(order.tokenHash, message.data);

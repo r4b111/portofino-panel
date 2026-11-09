@@ -85,3 +85,13 @@ Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Wor
 Al confirmar se borra `expires_at` junto con el cambio de estado. El cron horario expira y anonimiza pedidos vencidos en `pending_confirmation`, `confirmed`, `packing` o `shipped`.
 
 La migración `0004_order_retention.sql` conserva los datos existentes al convertir cuatro columnas obligatorias en columnas que admiten `NULL`. Cuando vence un pedido elegible, el cron elimina el nombre, correo, teléfono, dirección y notas de envío. Conserva el número, la ciudad, los importes y los ítems. La actualización y el evento de sistema sin datos personales se guardan juntos. Repetir el cron conserva un único evento de anonimización por pedido.
+
+## Despliegue y rotación de secretos
+
+En la configuración de producción de Wrangler, usa el binding `DB`, `database_name = "portofino"` y `database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"`. Configura `STOREFRONT_ORIGIN` en `[vars]` con el origen HTTPS exacto de la tienda, sin rutas. Si falta o es inválido, el navegador bloquea la carga del chat dentro de un iframe.
+
+Antes de publicar, revisa el historial de D1 con `npx wrangler d1 migrations list DB --remote`. La base de producción ya registró `0005_shipping_total.sql` desde una rama anterior. Comprueba qué migraciones quedan pendientes por nombre y aplícalas con `npx wrangler d1 migrations apply DB --remote`. Publica con `npx wrangler deploy`.
+
+- Rota `ADMIN_SESSION_SECRET` con `npx wrangler secret put ADMIN_SESSION_SECRET`. Las sesiones previas deberán volver a autenticarse.
+- Si cambias `TELEGRAM_BOT_TOKEN` o `TELEGRAM_WEBHOOK_SECRET`, actualiza los secretos en el Worker y registra de nuevo el webhook de Telegram con el valor correspondiente de `secret_token`.
+- Para rotar `DATA_SECRET`, prepara una migración que vuelva a cifrar los datos existentes con la clave nueva antes de retirar la anterior. El Worker usa una sola clave de datos.

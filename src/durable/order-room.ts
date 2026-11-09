@@ -13,7 +13,7 @@ const telegramRetryDelays = [1000, 2000, 4000] as const;
 const lifetimeMs = 5 * 60 * 1000;
 export const customerMessageSchema = z.object({
   id: z.string().uuid(),
-  body: z.string().max(2000).trim().min(1),
+  body: z.string().trim().min(1).max(2000),
 });
 const messageSchema = customerMessageSchema.extend({ type: z.literal('message') });
 

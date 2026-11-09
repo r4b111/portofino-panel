@@ -12,6 +12,7 @@ const app = new Hono<AppEnv>();
 app.use('*', async (context, next) => {
   context.header('Cache-Control', 'no-store');
   context.header('X-Content-Type-Options', 'nosniff');
+  if (context.req.path !== '/widgets/chat') context.header('X-Frame-Options', 'DENY');
   await next();
 });
 

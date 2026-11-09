@@ -13,6 +13,7 @@ const chatScript = String.raw`
   const input = form.elements.body;
   const submit = form.querySelector('button');
   const access = root.querySelector('[data-tracking-form]');
+  const customerChat = embedded || Boolean(access);
   const labels = {
     pending_confirmation: 'Pendiente de confirmación', confirmed: 'Confirmado',
     packing: 'En preparación', shipped: 'Enviado', delivered: 'Entregado',
@@ -51,6 +52,10 @@ const chatScript = String.raw`
     };
     fetch(root.dataset.ticketUrl, { method: 'POST', headers }).then(async (response) => {
       if (current !== generation) return;
+      if (response.status === 410) {
+        indicator.textContent = 'El enlace caducó';
+        return;
+      }
       if (response.redirected || [400, 401, 403, 404].includes(response.status)) {
         indicator.textContent = 'Acceso al pedido no disponible. Verifica tu sesión o código.';
         return;
@@ -94,40 +99,44 @@ const chatScript = String.raw`
     }).catch(retry);
   }
 
-  form.addEventListener('submit', async (event) => {
+  async function sendCustomerMessage(body) {
+    const current = generation;
+    const original = input.value;
+    if (customerDraft?.body !== body) customerDraft = { id: crypto.randomUUID(), body };
+    sending = true;
+    submit.disabled = true;
+    try {
+      const response = await fetch('/api/orders/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Tracking-Token': trackingToken },
+        body: JSON.stringify(customerDraft)
+      });
+      if (current !== generation) return;
+      if (response.status === 429) {
+        notice.textContent = 'Límite de mensajes alcanzado. Intenta en ' + response.headers.get('Retry-After') + ' s.';
+      } else if (response.ok) {
+        if (input.value === original) input.value = '';
+        customerDraft = undefined;
+        notice.textContent = '';
+      } else {
+        indicator.textContent = 'No se pudo enviar el mensaje.';
+      }
+    } catch {
+      if (current === generation) indicator.textContent = 'Se interrumpió la conexión. Intenta de nuevo.';
+    } finally {
+      if (current === generation) {
+        sending = false;
+        submit.disabled = socket?.readyState !== WebSocket.OPEN;
+      }
+    }
+  }
+
+  form.addEventListener('submit', (event) => {
     event.preventDefault();
     const body = input.value.trim();
     if (!socket || socket.readyState !== WebSocket.OPEN || submit.disabled || sending || !body) return;
-    if (access || embedded) {
-      const current = generation;
-      const original = input.value;
-      if (customerDraft?.body !== body) customerDraft = { id: crypto.randomUUID(), body };
-      sending = true;
-      submit.disabled = true;
-      try {
-        const response = await fetch('/api/orders/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Tracking-Token': trackingToken },
-          body: JSON.stringify(customerDraft)
-        });
-        if (current !== generation) return;
-        if (response.status === 429) {
-          notice.textContent = 'Límite de mensajes alcanzado. Intenta en ' + response.headers.get('Retry-After') + ' s.';
-        } else if (response.ok) {
-          if (input.value === original) input.value = '';
-          customerDraft = undefined;
-          notice.textContent = '';
-        } else {
-          indicator.textContent = 'No se pudo enviar el mensaje.';
-        }
-      } catch {
-        if (current === generation) indicator.textContent = 'Se interrumpió la conexión. Intenta de nuevo.';
-      } finally {
-        if (current === generation) {
-          sending = false;
-          submit.disabled = socket?.readyState !== WebSocket.OPEN;
-        }
-      }
+    if (customerChat) {
+      void sendCustomerMessage(body);
       return;
     }
     const id = crypto.randomUUID();
@@ -185,7 +194,7 @@ const chatScript = String.raw`
     if (socket) socket.close();
   });
   window.addEventListener('pageshow', (event) => {
-    if (event.persisted && ((!access && !embedded) || trackingToken)) connect(++generation);
+    if (event.persisted && (!customerChat || trackingToken)) connect(++generation);
   });
 })();
 `;

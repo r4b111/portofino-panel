@@ -42,15 +42,15 @@ telegramRoutes.post('/webhooks/telegram', async (context) => {
   if (/^\/start(?:@[^\s]+)?(?:\s|$)/i.test(body)) {
     const token = trackingTokenFormat.safeParse(body.split(/\s+/)[1]);
     if (token.success) {
-      const order = await findRealtimeOrder(DB, token.data);
-      if (order) {
+      const result = await findRealtimeOrder(DB, token.data);
+      if (result.kind === 'active') {
         const now = Date.now();
         await DB.prepare(`
           INSERT INTO conversations (id, order_id, telegram_chat_id, telegram_thread_id)
           SELECT ?, id, ?, ? FROM orders WHERE id = ? AND anonymized_at IS NULL AND status <> 'expired'
             AND (expires_at IS NULL OR expires_at > ?) AND (token_expires_at IS NULL OR token_expires_at > ?)
           ON CONFLICT DO NOTHING
-        `).bind(crypto.randomUUID(), chatId, threadId, order.id, now, now).run();
+        `).bind(crypto.randomUUID(), chatId, threadId, result.order.id, now, now).run();
       }
     }
     return context.json({ ok: true });

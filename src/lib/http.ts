@@ -12,6 +12,7 @@ export interface AppEnv {
   Bindings: {
     DB: D1Database;
     ORDER_ROOMS: DurableObjectNamespace<OrderRoom>;
+    STOREFRONT_ORIGIN?: string;
     DATA_SECRET?: string;
     ADMIN_SESSION_SECRET?: string;
     TELEGRAM_WEBHOOK_SECRET?: string;
