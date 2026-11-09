@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local --env local",
+    "dev": "wrangler dev --local",
     "typecheck": "tsc --noEmit",
-    "db:local": "wrangler d1 migrations apply DB --local --env local",
+    "db:local": "wrangler d1 migrations apply DB --local",
     "test": "vitest run"
   },
   "dependencies": {

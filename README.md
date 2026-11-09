@@ -14,7 +14,7 @@ npm run db:local
 npm run dev
 ```
 
-Wrangler crea la base local en `.wrangler/`. El identificador de base configurado es para desarrollo local. Para probar autenticación, copia `.dev.vars.example` a `.dev.vars` y genera un valor aleatorio e independiente para cada variable. Guarda las claves fuera de Git.
+`npm run dev` y `npm run db:local` usan exclusivamente el entorno local. Wrangler crea la base local en `.wrangler/`. Para producción, usa siempre `--env production`. Para probar autenticación, copia `.dev.vars.example` a `.dev.vars` y genera un valor aleatorio e independiente para cada variable. Guarda las claves fuera de Git.
 
 - `GET /health` comprueba que el Worker responde.
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.

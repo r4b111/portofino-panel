@@ -4,27 +4,24 @@ compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-STOREFRONT_ORIGIN = ""
+STOREFRONT_ORIGIN = "https://claro-panel-educativo-e41.r4b111.chatgpt.site"
 
-[env.local]
-name = "portofino-orders-prod"
-
-[env.local.vars]
-STOREFRONT_ORIGIN = ""
-
-[[env.local.d1_databases]]
+[[d1_databases]]
 binding = "DB"
 database_name = "portofino-orders-local"
 database_id = "00000000-0000-0000-0000-000000000001"
 migrations_dir = "migrations"
 
-[[env.local.durable_objects.bindings]]
+[[durable_objects.bindings]]
 name = "ORDER_ROOMS"
 class_name = "OrderRoom"
 
-[[env.local.migrations]]
+[[migrations]]
 tag = "v1"
 new_sqlite_classes = ["OrderRoom"]
+
+[triggers]
+crons = ["0 * * * *"]
 
 [env.production]
 name = "portofino-orders"
