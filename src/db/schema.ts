@@ -128,3 +128,12 @@ export const rateLimits = sqliteTable('rate_limits', {
 }, (table) => [
   check('rate_limits_count_check', sql`${table.count} BETWEEN 1 AND 10`),
 ]);
+
+export const orderCatalog = sqliteTable('order_catalog', {
+  productId: text('product_id').primaryKey().notNull(),
+  productName: text('product_name').notNull(),
+  presentation: text('presentation').notNull(),
+  unitAmount: integer('unit_amount').notNull(),
+}, (table) => [
+  check('order_catalog_unit_amount_check', sql`typeof(${table.unitAmount}) = 'integer' AND ${table.unitAmount} BETWEEN 0 AND 9007199254740991`),
+]);

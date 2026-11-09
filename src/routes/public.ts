@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { z } from 'zod';
 import { customerMessageSchema, trackingTokenFormat } from '../durable/order-room';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
-import { findRealtimeOrder, findTrackingOrder } from '../lib/orders/service';
+import { createOrder, findRealtimeOrder, findTrackingOrder } from '../lib/orders/service';
 import { trackingPage } from '../views/order-chat';
 
 export const publicRoutes = new Hono<AppEnv>();
@@ -56,4 +57,28 @@ publicRoutes.get('/api/orders/:id/realtime', (context) => {
   const id = context.req.param('id');
   if (!id || id.length > 128) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
   return context.env.ORDER_ROOMS.getByName(id).fetch(context.req.raw);
+});
+
+const newOrder = z.object({
+  name: z.string().trim().min(1).max(200),
+  email: z.string().trim().max(254).email(),
+  phone: z.string().trim().min(1).max(40),
+  address: z.string().trim().min(1).max(500),
+  city: z.string().trim().min(1).max(120).optional(),
+  items: z.array(z.object({
+    productId: z.string().trim().min(1).max(128),
+    qty: z.number().int().min(1).max(99),
+    unitAmount: z.number().int().safe().nonnegative(),
+  })).min(1).max(20),
+});
+
+publicRoutes.post('/api/orders', async (context) => {
+  const body: unknown = await context.req.json().catch(() => null);
+  const input = newOrder.safeParse(body);
+  if (!input.success) {
+    throw new HttpError(400, 'invalid_order', 'Revisa los datos y los ítems del pedido');
+  }
+
+  const order = await createOrder(context.env.DB, context.env.DATA_SECRET, input.data);
+  return context.json(order, 201);
 });

@@ -1,12 +1,13 @@
-import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
-import { auditLog, orderEvents, orderItems, orders } from '../../db/schema';
+import { auditLog, orderCatalog, orderEvents, orderItems, orders } from '../../db/schema';
+import { encrypt } from '../crypto';
 import { HttpError } from '../errors';
 import type { AppEnv } from '../http';
 import { allowedTransitions } from './state';
 import type { OrderStatus } from './state';
 
-import { hashTrackingToken } from '../tokens';
+import { generateTrackingToken, hashTrackingToken } from '../tokens';
 
 const trackingFields = {
   number: orders.number,
@@ -144,4 +145,99 @@ export async function findPanelOrder(database: D1Database, id: string) {
   if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
   const history = [...events, ...audit].sort((a, b) => a.at - b.at);
   return { order, items, history };
+}
+
+interface CreateOrderInput {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  city?: string | undefined;
+  items: { productId: string; qty: number }[];
+}
+
+const orderLifetimeMs = 72 * 60 * 60 * 1000;
+const maxOrderAttempts = 3;
+const orderNumberCollision = /\borders_number_uq\b|UNIQUE constraint failed: orders\.number\b(?!,)/;
+
+function isOrderNumberCollision(error: unknown): boolean {
+  if (typeof error === 'string') return orderNumberCollision.test(error);
+  if (!(error instanceof Error)) return false;
+  return orderNumberCollision.test(error.message)
+    || (error.cause !== error && isOrderNumberCollision(error.cause));
+}
+
+export async function createOrder(database: D1Database, secret: string | undefined, input: CreateOrderInput) {
+  if (!secret?.trim()) {
+    throw new HttpError(503, 'orders_unavailable', 'El alta de pedidos no está disponible');
+  }
+
+  const db = drizzle(database);
+  const productIds = [...new Set(input.items.map(({ productId }) => productId))];
+  const catalog = await db.select().from(orderCatalog)
+    .where(inArray(orderCatalog.productId, productIds));
+  const products = new Map(catalog.map((product) => [product.productId, product]));
+  let subtotalAmount = 0;
+
+  const items = input.items.map(({ productId, qty }) => {
+    const product = products.get(productId);
+    if (!product) {
+      throw new HttpError(400, 'unknown_product', 'Uno de los productos no está disponible');
+    }
+    const lineAmount = product.unitAmount * qty;
+    subtotalAmount += lineAmount;
+    if (!Number.isSafeInteger(lineAmount) || !Number.isSafeInteger(subtotalAmount)) {
+      throw new HttpError(400, 'invalid_amount', 'El importe del pedido supera el máximo permitido');
+    }
+    return { ...product, qty, lineAmount };
+  });
+
+  const token = generateTrackingToken();
+  const [trackingTokenHash, buyerEmailEnc, buyerPhoneEnc, shipAddressEnc] = await Promise.all([
+    hashTrackingToken(token),
+    encrypt(input.email, secret),
+    encrypt(input.phone, secret),
+    encrypt(input.address, secret),
+  ]);
+
+  const now = Date.now();
+  const expiresAt = now + orderLifetimeMs;
+  for (let attempt = 1; ; attempt++) {
+    const orderId = crypto.randomUUID();
+    const insertOrder = db.insert(orders).values({
+      id: orderId,
+      number: sql<number>`(SELECT COALESCE(MAX(number), 0) + 1 FROM orders)`,
+      trackingTokenHash,
+      subtotalAmount,
+      buyerName: input.name,
+      buyerEmailEnc,
+      buyerPhoneEnc,
+      shipAddressEnc,
+      shipCity: input.city ?? null,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+    }).returning({ number: orders.number });
+
+    try {
+      const [inserted] = await db.batch([
+        insertOrder,
+        ...items.map((item) => db.insert(orderItems).values({ ...item, id: crypto.randomUUID(), orderId })),
+        db.insert(orderEvents).values({
+          id: crypto.randomUUID(),
+          orderId,
+          seq: 1,
+          actorType: 'customer',
+          type: 'created',
+          toStatus: 'pending_confirmation',
+          createdAt: now,
+        }),
+      ]);
+      const [order] = inserted;
+      if (!order) throw new Error('D1 no devolvió el número del pedido');
+      return { number: order.number, token, expiresAt };
+    } catch (error) {
+      if (attempt >= maxOrderAttempts || !isOrderNumberCollision(error)) throw error;
+    }
+  }
 }
