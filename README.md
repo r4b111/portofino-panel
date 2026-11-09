@@ -20,7 +20,7 @@ Wrangler crea la base local en `.wrangler/`. El identificador de base configurad
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` para correr las pruebas en el pool de Cloudflare Workers. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
+Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **49 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -64,7 +64,7 @@ El cliente puede enviar mensajes con `POST /api/orders/messages`, el encabezado 
 
 ## Alta de pedidos
 
-`POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0006_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
+`POST /api/orders` recibe `name`, `email`, `phone`, `address`, `city` opcional y entre 1 y 20 ítems. Cada ítem requiere `productId`, `qty` de 1 a 99 y `unitAmount` entero no negativo. Configura `DATA_SECRET` y carga los productos en `order_catalog` después de aplicar `0008_order_catalog.sql`. El servidor calcula los importes con el precio registrado en el catálogo.
 
 La respuesta `201` entrega `{ number, token, expiresAt }`. Guarda el token en el cliente al recibirlo. El pedido pendiente vence a las 72 horas. Si se confirma, se elimina ese vencimiento y el código de seguimiento sigue funcionando.
 
@@ -88,10 +88,10 @@ La migración `0004_order_retention.sql` conserva los datos existentes al conver
 
 ## Despliegue y rotación de secretos
 
-En la configuración de producción de Wrangler, usa el binding `DB`, `database_name = "portofino"` y `database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"`. Configura `STOREFRONT_ORIGIN` en `[vars]` con el origen HTTPS exacto de la tienda, sin rutas. Si falta o es inválido, el navegador bloquea la carga del chat dentro de un iframe.
+El entorno `production` de Wrangler usa el binding `DB` de la base `portofino` con `database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"`. Configura `STOREFRONT_ORIGIN` en `[env.production.vars]` con el origen HTTPS exacto de la tienda, sin rutas. Si falta o es inválido, el navegador bloquea la carga del chat dentro de un iframe.
 
-Antes de publicar, revisa el historial de D1 con `npx wrangler d1 migrations list DB --remote`. La base de producción ya registró `0005_shipping_total.sql` desde una rama anterior. Comprueba qué migraciones quedan pendientes por nombre y aplícalas con `npx wrangler d1 migrations apply DB --remote`. Publica con `npx wrangler deploy`.
+Antes de publicar, revisa el historial con `npx wrangler d1 migrations list DB --remote --env production`. Producción ya aplicó hasta `0005_shipping_total.sql`. Los nombres siguientes son `0007_rate_limits.sql` y `0008_order_catalog.sql`. Aplica las migraciones pendientes con `npx wrangler d1 migrations apply DB --remote --env production` y publica con `npx wrangler deploy --env production`.
 
-- Rota `ADMIN_SESSION_SECRET` con `npx wrangler secret put ADMIN_SESSION_SECRET`. Las sesiones previas deberán volver a autenticarse.
+- Rota `ADMIN_SESSION_SECRET` con `npx wrangler secret put ADMIN_SESSION_SECRET --env production`. Las sesiones previas deberán volver a autenticarse.
 - Si cambias `TELEGRAM_BOT_TOKEN` o `TELEGRAM_WEBHOOK_SECRET`, actualiza los secretos en el Worker y registra de nuevo el webhook de Telegram con el valor correspondiente de `secret_token`.
 - Para rotar `DATA_SECRET`, prepara una migración que vuelva a cifrar los datos existentes con la clave nueva antes de retirar la anterior. El Worker usa una sola clave de datos.

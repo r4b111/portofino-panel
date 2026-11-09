@@ -19,3 +19,22 @@ new_sqlite_classes = ["OrderRoom"]
 
 [triggers]
 crons = ["0 * * * *"]
+
+[vars]
+STOREFRONT_ORIGIN = ""
+
+[env.production]
+name = "portofino-orders"
+
+[env.production.vars]
+STOREFRONT_ORIGIN = ""
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "portofino"
+database_id = "f05fbc67-1665-4f11-8fa6-abbdbd33949d"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "ORDER_ROOMS"
+class_name = "OrderRoom"
