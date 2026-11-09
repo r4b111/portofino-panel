@@ -3,9 +3,21 @@ import { hashTrackingToken } from './tokens';
 const windowMs = 60_000;
 const maxAttempts = 5;
 
-export async function limitLogin(database: D1Database, secret: string, email: string, ip: string) {
-  const keys = await Promise.all([['email', email], ['ip', ip]].map(async ([kind, value]) =>
+export async function loginLimitKeys(secret: string, email: string, ip: string) {
+  return Promise.all([['email', email], ['ip', ip]].map(async ([kind, value]) =>
     'login:' + kind + ':' + await hashTrackingToken(JSON.stringify([secret, kind, value]))));
+}
+
+export async function loginIsLimited(database: D1Database, keys: readonly string[]) {
+  const blocked = await database.prepare(`
+    SELECT 1 FROM rate_limits
+    WHERE key IN (?, ?) AND window_start > ? AND count >= ?
+    LIMIT 1
+  `).bind(...keys, Date.now() - windowMs, maxAttempts).first();
+  return blocked !== null;
+}
+
+export async function recordLoginFailure(database: D1Database, keys: readonly string[]) {
   const now = Date.now();
   const cutoff = now - windowMs;
   const results = await database.batch([

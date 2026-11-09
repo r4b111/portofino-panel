@@ -164,6 +164,26 @@ describe('autenticación y transiciones administrativas', () => {
     }
   });
 
+  it('cuenta solo los fallos e incluye los fallos de TOTP en la cuota', async () => {
+    const credentials = { email: 'agent@example.test', password };
+    const authenticate = (value: string) =>
+      jsonRequest('/admin/login', 'POST', { ...credentials, password: value });
+    for (let attempt = 0; attempt < 4; attempt++) {
+      expect((await authenticate('incorrecta')).status).toBe(401);
+      expect((await authenticate(password)).status).toBe(200);
+    }
+    await db.prepare("UPDATE admins SET totp_secret = ? WHERE id = 'agent'")
+      .bind('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ').run();
+    try {
+      const fifth = await authenticate(password);
+      expect(fifth.status).toBe(401);
+      expect(await fifth.json()).toMatchObject({ error: { code: 'totp_required' } });
+      expect((await authenticate(password)).status).toBe(429);
+    } finally {
+      await db.prepare("UPDATE admins SET totp_secret = NULL WHERE id = 'agent'").run();
+    }
+  });
+
   it('acepta el hash anterior y lo actualiza tras un inicio de sesión válido', async () => {
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);

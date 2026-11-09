@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { admins } from '../db/schema';
 import { HttpError } from './errors';
 import type { AppEnv } from './http';
-import { limitLogin } from './login-limit';
+import { loginIsLimited, loginLimitKeys, recordLoginFailure } from './login-limit';
 import { hashPassword, verifyPassword } from './passwords';
 import { matchingTotpStep } from './totp';
 
@@ -33,26 +33,31 @@ export async function loginAgent(context: Context<AppEnv>, email: string, passwo
   const normalizedEmail = email.toLowerCase();
   const database = context.env.DB;
   const ip = context.req.header('CF-Connecting-IP') ?? 'unavailable';
-  if (!await limitLogin(database, secret, normalizedEmail, ip)) {
-    throw new HttpError(429, 'login_rate_limited', 'Demasiados intentos. Inténtalo más tarde');
-  }
+  const keys = await loginLimitKeys(secret, normalizedEmail, ip);
+  const limitError = () => new HttpError(429, 'login_rate_limited', 'Demasiados intentos. Inténtalo más tarde');
+  if (await loginIsLimited(database, keys)) throw limitError();
+
+  const rejectLogin = async (code: string, message: string): Promise<never> => {
+    if (!await recordLoginFailure(database, keys)) throw limitError();
+    throw new HttpError(401, code, message);
+  };
   const db = drizzle(database);
   const [admin] = await db.select().from(admins).where(eq(admins.email, normalizedEmail)).limit(1);
   const valid = await verifyPassword(password, admin?.passwordHash);
   if (!admin || !valid) {
-    throw new HttpError(401, 'invalid_credentials', 'Credenciales inválidas');
+    return rejectLogin('invalid_credentials', 'Credenciales inválidas');
   }
 
   if (admin.totpSecret !== null) {
     const step = await matchingTotpStep(admin.totpSecret, totp, Date.now());
-    if (step === null) throw new HttpError(401, 'totp_required', 'Ingresa un código de autenticación válido');
+    if (step === null) return rejectLogin('totp_required', 'Ingresa un código de autenticación válido');
     const accepted = await database.prepare(`
       INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
       ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start
       WHERE rate_limits.window_start < excluded.window_start
     `).bind('totp:' + admin.id, step).run();
     if (accepted.meta.changes !== 1) {
-      throw new HttpError(401, 'totp_required', 'Ingresa un código de autenticación válido');
+      return rejectLogin('totp_required', 'Ingresa un código de autenticación válido');
     }
   }
 
