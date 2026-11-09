@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [cloudflareTest({
-    wrangler: { configPath: './wrangler.toml' },
+    wrangler: { configPath: './wrangler.toml', environment: 'local' },
     miniflare: { bindings: {
       TEST_MIGRATIONS: await readD1Migrations('./migrations'),
       TELEGRAM_BOT_TOKEN: '123:fake-token',
