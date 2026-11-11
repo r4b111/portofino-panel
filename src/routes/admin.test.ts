@@ -217,13 +217,18 @@ describe('autenticación y transiciones administrativas', () => {
     const paid = await updatePayment('paid', owner.credential);
     expect(paid.status).toBe(200);
     expect(await paid.json()).toMatchObject({ order: { paymentStatus: 'paid', version: 2 } });
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe('paid');
     expect((await updatePayment('paid', owner.credential)).status).toBe(409);
+    const paidEvent = {
+      actor_id: 'owner', type: 'payment_changed', payload: JSON.stringify({ from: previous, to: 'paid' }),
+    };
+    expect((await events()).results).toEqual([paidEvent]);
 
     const refunded = await updatePayment('refunded', owner.credential);
     expect(refunded.status).toBe(200);
     expect(await refunded.json()).toMatchObject({ order: { paymentStatus: 'refunded', version: 3 } });
     expect((await events()).results).toEqual([
-      { actor_id: 'owner', type: 'payment_changed', payload: JSON.stringify({ from: previous, to: 'paid' }) },
+      paidEvent,
       { actor_id: 'owner', type: 'payment_changed', payload: '{"from":"paid","to":"refunded"}' },
     ]);
   });

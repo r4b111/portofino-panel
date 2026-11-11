@@ -77,10 +77,9 @@ adminRoutes.patch('/orders/:number/payment', requireAgent, ownerOnly, async (con
   const number = orderNumber.safeParse(context.req.param('number'));
   if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
   const input = payment.safeParse(await readJson(context));
-  if (!input.success) {
-    throw new HttpError(400, 'invalid_payment_status', 'Estado de pago inválido');
-  }
-  const updatePayment = input.data.paymentStatus === 'paid' ? markOrderPaid : refundOrderPayment;
-  const order = await updatePayment(context.env, number.data, context.get('agent'));
+  if (!input.success) throw new HttpError(400, 'invalid_payment_status', 'Estado de pago inválido');
+  const order = input.data.paymentStatus === 'paid'
+    ? await markOrderPaid(context.env, number.data, context.get('agent'))
+    : await refundOrderPayment(context.env, number.data, context.get('agent'));
   return context.json({ order });
 });
