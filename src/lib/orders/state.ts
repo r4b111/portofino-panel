@@ -19,6 +19,8 @@ export const orderEventTypes = [
   'created', 'status_changed', 'payment_changed', 'items_changed', 'note', 'anonymized',
 ] as const;
 
+export type PaymentStatus = typeof paymentStatuses[number];
+
 export type OrderStatus = typeof orderStatuses[number];
 
 export const allowedTransitions: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {

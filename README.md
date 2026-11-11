@@ -20,7 +20,7 @@ npm run dev
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **52 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
+Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **56 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -98,6 +98,18 @@ Carga el script clásico del Worker en la página privada del pedido y asigna al
 
 Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Worker en `script-src` y `frame-src`. Al abrir la conversación tras recargar, el widget recupera el estado y el historial del pedido. Si se interrumpe la conexión, reintenta con pausas crecientes de hasta 30 segundos. Si se alcanza el límite de envío, muestra un aviso y conserva el borrador.
 
+
+## Confirmar envío
+
+Un agente autenticado puede enviar `PATCH /admin/orders/:number/shipping` con `{ "carrier": "Inter Rapidísimo", "shippingCost": 12000, "shippingEtaDays": 3 }`. El costo debe expresarse en unidades enteras de la moneda del pedido. Se admite costo cero para envío gratis. El pedido debe estar pendiente de confirmación.
+
+El servidor suma el costo al subtotal guardado y confirma el pedido en el mismo batch que registra el cambio en auditoría. El widget muestra subtotal, envío, total, transportadora y plazo estimado. Antes de confirmar la cotización, el costo y el total aparecen como «Por confirmar».
+
+## Estados de pago
+
+Al confirmar un pedido con pago pendiente (`unpaid`), el sistema activa el pago contra entrega (`cod_pending`). Al marcarlo como entregado, registra el cobro (`cod_collected`). Un pedido con estado de pago `unpaid` no puede pasar a entregado.
+
+Solo un `owner` puede registrar un reembolso con `PATCH /admin/orders/:number/payment` y el cuerpo `{ "paymentStatus": "refunded" }`. El pago debe estar en `paid` o `cod_collected`. Cada cambio agrega un evento `payment_changed` cuyo payload contiene únicamente los dos estados de pago.
 
 ## Retención de pedidos
 
