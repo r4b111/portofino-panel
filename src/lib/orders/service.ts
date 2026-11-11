@@ -114,7 +114,19 @@ const allowedPaymentSources: Record<'paid' | 'refunded', readonly PaymentStatus[
   refunded: ['paid', 'cod_collected'],
 };
 
-export async function updateOrderPayment(
+export function markOrderPaid(
+  env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+) {
+  return updateOrderPayment(env, number, actor, 'paid');
+}
+
+export function refundOrderPayment(
+  env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+) {
+  return updateOrderPayment(env, number, actor, 'refunded');
+}
+
+async function updateOrderPayment(
   env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
   paymentStatus: keyof typeof allowedPaymentSources,
 ) {

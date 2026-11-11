@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/auth';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
-import { confirmOrderShipping, findAdminOrder, transitionOrder, updateOrderPayment } from '../lib/orders/service';
+import {
+  confirmOrderShipping, findAdminOrder, markOrderPaid, refundOrderPayment, transitionOrder,
+} from '../lib/orders/service';
 import { orderStatuses } from '../lib/orders/state';
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -78,6 +80,7 @@ adminRoutes.patch('/orders/:number/payment', requireAgent, ownerOnly, async (con
   if (!input.success) {
     throw new HttpError(400, 'invalid_payment_status', 'Estado de pago inválido');
   }
-  const order = await updateOrderPayment(context.env, number.data, context.get('agent'), input.data.paymentStatus);
+  const updatePayment = input.data.paymentStatus === 'paid' ? markOrderPaid : refundOrderPayment;
+  const order = await updatePayment(context.env, number.data, context.get('agent'));
   return context.json({ order });
 });
