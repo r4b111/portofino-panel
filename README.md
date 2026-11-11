@@ -20,7 +20,7 @@ npm run dev
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **56 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
+Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **58 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -109,7 +109,7 @@ El servidor suma el costo al subtotal guardado y confirma el pedido en el mismo 
 
 Al confirmar un pedido con pago pendiente (`unpaid`), el sistema activa el pago contra entrega (`cod_pending`). Al marcarlo como entregado, registra el cobro (`cod_collected`). Un pedido con estado de pago `unpaid` no puede pasar a entregado.
 
-Solo un `owner` puede registrar un reembolso con `PATCH /admin/orders/:number/payment` y el cuerpo `{ "paymentStatus": "refunded" }`. El pago debe estar en `paid` o `cod_collected`. Cada cambio agrega un evento `payment_changed` cuyo payload contiene únicamente los dos estados de pago.
+Solo un `owner` puede usar `PATCH /admin/orders/:number/payment`. Envía `{ "paymentStatus": "paid" }` para registrar un pago desde `unpaid` o `cod_pending`, o `{ "paymentStatus": "refunded" }` para registrar un reembolso desde `paid` o `cod_collected`. Cada cambio agrega un evento `payment_changed` cuyo payload contiene únicamente los dos estados de pago.
 
 ## Retención de pedidos
 

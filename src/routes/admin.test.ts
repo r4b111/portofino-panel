@@ -200,6 +200,34 @@ describe('autenticación y transiciones administrativas', () => {
     ]);
   });
 
+  it.each(['unpaid', 'cod_pending'])('solo permite al owner marcar pagado desde %s y reembolsar después', async (previous) => {
+    const agent = await login('agent');
+    const owner = await login('owner');
+    const updatePayment = (paymentStatus: 'paid' | 'refunded', cookie: string) =>
+      jsonRequest('/admin/orders/1/payment', 'PATCH', { paymentStatus }, cookie);
+    const events = () => db.prepare(
+      'SELECT actor_id, type, payload FROM order_events ORDER BY seq',
+    ).all();
+    await db.prepare('UPDATE orders SET payment_status = ?').bind(previous).run();
+
+    expect((await updatePayment('paid', agent.credential)).status).toBe(403);
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe(previous);
+    expect((await events()).results).toEqual([]);
+
+    const paid = await updatePayment('paid', owner.credential);
+    expect(paid.status).toBe(200);
+    expect(await paid.json()).toMatchObject({ order: { paymentStatus: 'paid', version: 2 } });
+    expect((await updatePayment('paid', owner.credential)).status).toBe(409);
+
+    const refunded = await updatePayment('refunded', owner.credential);
+    expect(refunded.status).toBe(200);
+    expect(await refunded.json()).toMatchObject({ order: { paymentStatus: 'refunded', version: 3 } });
+    expect((await events()).results).toEqual([
+      { actor_id: 'owner', type: 'payment_changed', payload: JSON.stringify({ from: previous, to: 'paid' }) },
+      { actor_id: 'owner', type: 'payment_changed', payload: '{"from":"paid","to":"refunded"}' },
+    ]);
+  });
+
   it.each(['paid', 'cod_collected'])('solo permite al owner reembolsar desde %s', async (previous) => {
     const agent = await login('agent');
     const owner = await login('owner');
