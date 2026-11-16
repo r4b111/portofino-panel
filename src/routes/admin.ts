@@ -71,15 +71,19 @@ adminRoutes.patch('/orders/:number/shipping', requireAgent, async (context) => {
   return context.json({ order });
 });
 
-const payment = z.object({ paymentStatus: z.enum(['paid', 'refunded']) }).strict();
+const payment = z.object({
+  paymentStatus: z.enum(['paid', 'refunded']),
+  expectedVersion: z.number().int().safe().positive().optional(),
+}).strict();
 
 adminRoutes.patch('/orders/:number/payment', requireAgent, ownerOnly, async (context) => {
   const number = orderNumber.safeParse(context.req.param('number'));
   if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
   const input = payment.safeParse(await readJson(context));
   if (!input.success) throw new HttpError(400, 'invalid_payment_status', 'Estado de pago inválido');
-  const order = input.data.paymentStatus === 'paid'
-    ? await markOrderPaid(context.env, number.data, context.get('agent'))
-    : await refundOrderPayment(context.env, number.data, context.get('agent'));
+  const { paymentStatus, expectedVersion } = input.data;
+  const order = paymentStatus === 'paid'
+    ? await markOrderPaid(context.env, number.data, context.get('agent'), expectedVersion)
+    : await refundOrderPayment(context.env, number.data, context.get('agent'), expectedVersion);
   return context.json({ order });
 });

@@ -4,7 +4,7 @@ import { auditLog, orderCatalog, orderEvents, orderItems, orders } from '../../d
 import { encrypt } from '../crypto';
 import { HttpError } from '../errors';
 import type { AppEnv } from '../http';
-import { allowedTransitions } from './state';
+import { allowedPaymentSources, allowedTransitions } from './state';
 import type { OrderStatus, PaymentStatus } from './state';
 
 import { generateTrackingToken, hashTrackingToken } from '../tokens';
@@ -109,26 +109,24 @@ async function publishOrderState(
   }
 }
 
-const allowedPaymentSources: Record<'paid' | 'refunded', readonly PaymentStatus[]> = {
-  paid: ['unpaid', 'cod_pending'],
-  refunded: ['paid', 'cod_collected'],
-};
-
 export function markOrderPaid(
   env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+  expectedVersion?: number,
 ) {
-  return updateOrderPayment(env, number, actor, 'paid');
+  return updateOrderPayment(env, number, actor, 'paid', expectedVersion);
 }
 
 export function refundOrderPayment(
   env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+  expectedVersion?: number,
 ) {
-  return updateOrderPayment(env, number, actor, 'refunded');
+  return updateOrderPayment(env, number, actor, 'refunded', expectedVersion);
 }
 
 async function updateOrderPayment(
   env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
   paymentStatus: keyof typeof allowedPaymentSources,
+  expectedVersion?: number,
 ) {
   if (actor.role !== 'owner') throw new HttpError(403, 'forbidden_role', 'Acceso no autorizado');
   const database = env.DB;
@@ -136,6 +134,9 @@ async function updateOrderPayment(
     id: orders.id, status: orders.status, version: orders.version, paymentStatus: orders.paymentStatus,
   }).from(orders).where(eq(orders.number, number)).limit(1);
   if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  if (expectedVersion !== undefined && expectedVersion !== order.version) {
+    throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
+  }
   if (!allowedPaymentSources[paymentStatus].includes(order.paymentStatus)) {
     throw new HttpError(409, 'invalid_payment_transition', paymentStatus === 'refunded'
       ? 'El pago no se puede reembolsar'
