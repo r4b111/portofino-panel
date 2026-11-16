@@ -6,7 +6,9 @@ import { z } from 'zod';
 import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/auth';
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
-import { findPanelOrder, listPanelOrders, panelPageSize, transitionOrder } from '../lib/orders/service';
+import {
+  findPanelOrder, listPanelOrders, markOrderPaid, panelPageSize, refundOrderPayment, transitionOrder,
+} from '../lib/orders/service';
 import { orderStatuses } from '../lib/orders/state';
 import { loginPage, orderDetail, orderList, panelError } from '../views/panel';
 
@@ -21,6 +23,10 @@ const filters = z.object({
 });
 const transitionForm = z.object({
   status: z.enum(orderStatuses),
+  expectedVersion: positiveInteger,
+});
+const paymentForm = z.object({
+  paymentStatus: z.enum(['paid', 'refunded']),
   expectedVersion: positiveInteger,
 });
 const orderId = z.string().min(1).max(128);
@@ -96,6 +102,27 @@ panelRoutes.post('/pedidos/:id', requireAgent, sameOriginForm, async (context, n
     if (!(error instanceof HttpError) || error.status !== 409) throw error;
     const detail = await findPanelOrder(context.env.DB, id.data);
     return context.html(orderDetail(detail, agent.role, { draft, message: error.message }), 409);
+  }
+  return context.redirect('/pedidos/' + encodeURIComponent(id.data), 303);
+});
+
+panelRoutes.post('/pedidos/:id/pago', requireAgent, sameOriginForm, ownerOnly, async (context) => {
+  const id = orderId.safeParse(context.req.param('id'));
+  if (!id.success) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  const input = paymentForm.safeParse(await formBody(context));
+  if (!input.success) throw new HttpError(400, 'invalid_payment_form', 'Revisa el estado de pago y la versión');
+  const row = await context.env.DB.prepare('SELECT number FROM orders WHERE id = ?')
+    .bind(id.data).first<{ number: number }>();
+  if (!row) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  const { paymentStatus, expectedVersion } = input.data;
+  const agent = context.get('agent');
+  try {
+    const updatePayment = paymentStatus === 'paid' ? markOrderPaid : refundOrderPayment;
+    await updatePayment(context.env, row.number, agent, expectedVersion);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 409) throw error;
+    const detail = await findPanelOrder(context.env.DB, id.data);
+    return context.html(orderDetail(detail, agent.role, { paymentStatus, message: error.message }), 409);
   }
   return context.redirect('/pedidos/' + encodeURIComponent(id.data), 303);
 });

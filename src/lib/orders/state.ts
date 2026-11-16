@@ -21,6 +21,11 @@ export const orderEventTypes = [
 
 export type PaymentStatus = typeof paymentStatuses[number];
 
+export const allowedPaymentSources: Record<'paid' | 'refunded', readonly PaymentStatus[]> = {
+  paid: ['unpaid', 'cod_pending'],
+  refunded: ['paid', 'cod_collected'],
+};
+
 export type OrderStatus = typeof orderStatuses[number];
 
 export const allowedTransitions: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {

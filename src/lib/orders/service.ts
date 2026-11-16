@@ -4,7 +4,7 @@ import { auditLog, orderCatalog, orderEvents, orderItems, orders } from '../../d
 import { encrypt } from '../crypto';
 import { HttpError } from '../errors';
 import type { AppEnv } from '../http';
-import { allowedTransitions } from './state';
+import { allowedPaymentSources, allowedTransitions } from './state';
 import type { OrderStatus, PaymentStatus } from './state';
 
 import { generateTrackingToken, hashTrackingToken } from '../tokens';
@@ -109,8 +109,24 @@ async function publishOrderState(
   }
 }
 
-export async function refundOrderPayment(
+export function markOrderPaid(
   env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+  expectedVersion?: number,
+) {
+  return updateOrderPayment(env, number, actor, 'paid', expectedVersion);
+}
+
+export function refundOrderPayment(
+  env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+  expectedVersion?: number,
+) {
+  return updateOrderPayment(env, number, actor, 'refunded', expectedVersion);
+}
+
+async function updateOrderPayment(
+  env: AppEnv['Bindings'], number: number, actor: AppEnv['Variables']['agent'],
+  paymentStatus: keyof typeof allowedPaymentSources,
+  expectedVersion?: number,
 ) {
   if (actor.role !== 'owner') throw new HttpError(403, 'forbidden_role', 'Acceso no autorizado');
   const database = env.DB;
@@ -118,21 +134,26 @@ export async function refundOrderPayment(
     id: orders.id, status: orders.status, version: orders.version, paymentStatus: orders.paymentStatus,
   }).from(orders).where(eq(orders.number, number)).limit(1);
   if (!order) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
-  if (order.paymentStatus !== 'paid' && order.paymentStatus !== 'cod_collected') {
-    throw new HttpError(409, 'invalid_payment_transition', 'El pago no se puede reembolsar');
+  if (expectedVersion !== undefined && expectedVersion !== order.version) {
+    throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
+  }
+  if (!allowedPaymentSources[paymentStatus].includes(order.paymentStatus)) {
+    throw new HttpError(409, 'invalid_payment_transition', paymentStatus === 'refunded'
+      ? 'El pago no se puede reembolsar'
+      : 'El pedido no se puede marcar como pagado');
   }
   const now = Date.now();
   const [updated] = await database.batch([
     database.prepare(`
-      UPDATE orders SET payment_status = 'refunded', version = version + 1, updated_at = ?
+      UPDATE orders SET payment_status = ?, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ? AND payment_status = ?
-    `).bind(now, order.id, order.version, order.paymentStatus),
-    paymentChanged(database, order.id, actor.id, order.paymentStatus, 'refunded', now),
+    `).bind(paymentStatus, now, order.id, order.version, order.paymentStatus),
+    paymentChanged(database, order.id, actor.id, order.paymentStatus, paymentStatus, now),
   ]);
   if (updated?.meta.changes !== 1) throw new HttpError(409, 'order_changed', 'Otro agente lo modificó');
   const state = { status: order.status, version: order.version + 1 };
   await publishOrderState(env, order.id, state);
-  return { number, ...state, paymentStatus: 'refunded' as const, updatedAt: now };
+  return { number, ...state, paymentStatus, updatedAt: now };
 }
 
 async function applyOrderTransition(
