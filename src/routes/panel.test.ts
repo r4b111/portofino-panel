@@ -27,8 +27,8 @@ function post(path: string, fields: Record<string, string>, cookie?: string) {
   }, testBindings);
 }
 
-async function login() {
-  const response = await post('/login', { email: 'owner@example.test', password });
+async function login(role: 'owner' | 'agent' = 'owner') {
+  const response = await post('/login', { email: role + '@example.test', password });
   expect(response.status).toBe(303);
   expect(response.headers.get('Location')).toBe('/pedidos');
   const cookie = response.headers.get('Set-Cookie')?.split(';', 1)[0];
@@ -37,16 +37,17 @@ async function login() {
 }
 
 function versionFrom(page: string) {
-  const version = /name="expectedVersion" value="(\d+)"/.exec(page)?.[1];
+  const version = /<form class="row" action="\/pedidos\/order-1" method="post"><input type="hidden" name="expectedVersion" value="(\d+)"/.exec(page)?.[1];
   if (!version) throw new Error('Falta la versión en el formulario');
   return version;
 }
 
 beforeAll(async () => {
   await applyD1Migrations(db, bindings.TEST_MIGRATIONS);
-  await db.prepare(
+  const passwordHash = await hashPassword(password);
+  await db.batch(['owner', 'agent'].map((role) => db.prepare(
     'INSERT INTO admins (id, email, password_hash, role) VALUES (?, ?, ?, ?)',
-  ).bind('owner', 'owner@example.test', await hashPassword(password), 'owner').run();
+  ).bind(role, role + '@example.test', passwordHash, role)));
 });
 
 beforeEach(async () => {
@@ -70,6 +71,47 @@ beforeEach(async () => {
 });
 
 describe('panel de pedidos', () => {
+  it('muestra las acciones de pago por rol y rechaza una versión obsoleta', async () => {
+    const owner = await login();
+    const agent = await login('agent');
+    const payment = (paymentStatus: 'paid' | 'refunded', expectedVersion: number, cookie = owner) =>
+      app.request(origin + '/admin/orders/1/payment', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Origin: origin, Cookie: cookie },
+        body: JSON.stringify({ paymentStatus, expectedVersion }),
+      }, testBindings);
+    const unpaid = await (await get(detailPath, owner)).text();
+    expect(unpaid).toContain('<form class="row" action="/pedidos/order-1/pago" method="post">');
+    const ownerButton = unpaid.match(/<button[^>]*name="paymentStatus" value="paid"[^>]*>Marcar pagado<\/button>/)?.[0];
+    expect(ownerButton).toContain('data-payment-action="paid" data-payment-version="1"');
+    expect(ownerButton).not.toMatch(/\sdisabled(?:[\s=>])/);
+    expect(await (await get(detailPath, agent)).text())
+      .toMatch(/<button[^>]*disabled[^>]*title="Solo el propietario"[^>]*>Marcar pagado/);
+    expect((await payment('paid', 1, agent)).status).toBe(403);
+    const payForm = (paymentStatus: string, expectedVersion: string, cookie = owner) =>
+      post(detailPath + '/pago', { paymentStatus, expectedVersion }, cookie);
+    expect((await payForm('paid', '1', agent)).status).toBe(403);
+
+    expect((await post(detailPath, { status: 'confirmed', expectedVersion: '1' }, owner)).status).toBe(303);
+    const stale = await payment('paid', 1);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: { code: 'order_changed', message: 'Otro agente lo modificó' } });
+    const staleForm = await payForm('paid', '1');
+    expect(staleForm.status).toBe(409);
+    const staleHtml = await staleForm.text();
+    expect(staleHtml).toContain('Otro agente lo modificó');
+    expect(staleHtml).toContain('Cargar la versión actual para continuar');
+    expect(await db.prepare('SELECT payment_status FROM orders').first('payment_status')).toBe('cod_pending');
+
+    expect((await payment('paid', 2)).status).toBe(200);
+    expect(await (await get(detailPath, owner)).text())
+      .toMatch(/data-payment-action="refunded" data-payment-version="3"[^>]*>Reembolsar/);
+    const refund = await payForm('refunded', '3');
+    expect(refund.status).toBe(303);
+    expect(refund.headers.get('Location')).toBe(detailPath);
+    expect(await (await get(detailPath, owner)).text()).not.toContain('data-payment-action=');
+  });
+
   it('renderiza login en español y redirige a quien no tiene sesión', async () => {
     const blocked = await get('/pedidos');
     expect(blocked.status).toBe(303);

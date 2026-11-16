@@ -42,6 +42,43 @@ const paymentLabels = {
   cod_collected: 'Contraentrega cobrada', refunded: 'Reembolsado',
 } as const;
 
+const paymentScript = `
+(() => {
+  const button = document.querySelector('[data-payment-action]');
+  const alert = document.querySelector('[data-payment-alert]');
+  const feedback = document.querySelector('[data-payment-feedback]');
+  button.form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    feedback.hidden = true;
+    try {
+      const response = await fetch(button.dataset.paymentUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentStatus: button.dataset.paymentAction,
+          expectedVersion: Number(button.dataset.paymentVersion),
+        }),
+      });
+      if (response.status === 200) {
+        window.location.reload();
+        return;
+      }
+      if (response.status === 409) {
+        const { error } = await response.json();
+        alert.querySelector('[data-conflict-message]').textContent = error.message;
+        alert.hidden = false;
+        return;
+      }
+    } catch {
+      // A network error leaves the action available to retry.
+    }
+    feedback.hidden = false;
+    button.disabled = false;
+  });
+})();
+`;
+
 const panelCss = `
 :root{color-scheme:light;font:16px system-ui,sans-serif;color:#183a30;background:#f7f6ef}
 body{margin:0}header{background:#153f33;color:#fff;padding:1rem max(5%,calc((100% - 68rem)/2))}
@@ -145,36 +182,64 @@ export function orderList(
   </Page>}`;
 }
 
+function ConflictAlert({ url, action, message, hidden }: {
+  url: string; action: string; message?: string; hidden?: boolean;
+}) {
+  return <div role="alert" class="alert" hidden={hidden} data-payment-alert={hidden ? '' : undefined}>
+    <p data-conflict-message="">{message}</p>
+    <p>Acción conservada: <strong>{action}</strong>.</p>
+    <a href={url}>Cargar la versión actual para continuar</a>
+  </div>;
+}
+
 export function orderDetail(
   { order, items, history }: Awaited<ReturnType<typeof findPanelOrder>>,
   role: 'owner' | 'agent',
-  conflict?: { draft: TransitionDraft; message: string },
+  conflict?: { message: string } & ({ draft: TransitionDraft } | { paymentStatus: 'paid' | 'refunded' }),
 ) {
   const available = allowedTransitions[order.status].filter(
     (status) => status !== 'cancelled' || role === 'owner',
   );
   const url = detailUrl(order.id);
+  const stateConflict = conflict && 'draft' in conflict ? conflict : undefined;
+  const paymentConflict = conflict && 'paymentStatus' in conflict ? conflict : undefined;
+  const canMarkPaid = order.paymentStatus === 'unpaid' || order.paymentStatus === 'cod_pending';
+  const canRefund = order.paymentStatus === 'paid' || order.paymentStatus === 'cod_collected';
+  const paymentAction = paymentConflict?.paymentStatus
+    ?? (canMarkPaid ? 'paid' : canRefund ? 'refunded' : null);
+  const paymentActionLabel = paymentAction === 'paid' ? 'Marcar pagado' : 'Reembolsar';
+  const owner = role === 'owner';
   return html`<!doctype html>${<Page title={'Pedido #' + order.number}>
     <a href="/pedidos">← Volver a pedidos</a>
     <section class="card">
       <h2>{statusLabels[order.status]}</h2>
       <p>{order.buyerName ?? 'Datos anonimizados'}{order.shipCity ? ' · ' + order.shipCity : ''}</p>
       <p>{paymentLabels[order.paymentStatus]} · Versión {order.version}</p>
+      {paymentAction && <form class="row" action={url + '/pago'} method="post">
+        <input type="hidden" name="expectedVersion" value={order.version} />
+        <button type="submit" disabled={!owner || Boolean(paymentConflict)} title={owner ? undefined : 'Solo el propietario'}
+          name="paymentStatus" value={paymentAction}
+          class={paymentAction === 'refunded' ? 'danger' : undefined}
+          data-payment-action={paymentAction} data-payment-version={order.version}
+          data-payment-url={'/admin/orders/' + order.number + '/payment'}>{paymentActionLabel}</button>
+        {paymentConflict && <ConflictAlert url={url} action={paymentActionLabel} message={paymentConflict.message} />}
+        {owner && !paymentConflict && <>
+          <ConflictAlert url={url} action={paymentActionLabel} hidden />
+          <p role="alert" class="alert" data-payment-feedback="" hidden>No se pudo actualizar el pago.</p>
+          <script>{raw(paymentScript)}</script>
+        </>}
+      </form>}
       <p>Subtotal <strong>{amount(order.subtotalAmount, order.currency)}</strong></p>
       <p>Total <strong>{amount(order.totalAmount, order.currency)}</strong></p>
     </section>
     <section class="card" aria-labelledby="estado-heading">
       <h2 id="estado-heading">Cambiar estado</h2>
-      {conflict && <div role="alert" class="alert">
-        <p>{conflict.message}</p>
-        <p>Acción conservada: <strong>{actions[conflict.draft.status]}</strong>.</p>
-        <a href={url}>Cargar la versión actual para continuar</a>
-      </div>}
-      {conflict || available.length ? <form class="row" action={url} method="post">
-        <input type="hidden" name="expectedVersion" value={conflict?.draft.expectedVersion ?? order.version} />
-        {conflict
-          ? <><input type="hidden" name="status" value={conflict.draft.status} />
-            <button type="submit" disabled>{actions[conflict.draft.status]}</button></>
+      {stateConflict && <ConflictAlert url={url} action={actions[stateConflict.draft.status]} message={stateConflict.message} />}
+      {stateConflict || available.length ? <form class="row" action={url} method="post">
+        <input type="hidden" name="expectedVersion" value={stateConflict?.draft.expectedVersion ?? order.version} />
+        {stateConflict
+          ? <><input type="hidden" name="status" value={stateConflict.draft.status} />
+            <button type="submit" disabled>{actions[stateConflict.draft.status]}</button></>
           : available.map((status) => <button type="submit" name="status" value={status}
             class={status === 'cancelled' ? 'danger' : undefined}>{actions[status]}</button>)}
       </form> : <p>No hay acciones disponibles para este estado.</p>}
