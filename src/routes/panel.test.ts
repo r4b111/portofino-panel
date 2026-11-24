@@ -71,6 +71,78 @@ beforeEach(async () => {
 });
 
 describe('panel de pedidos', () => {
+  it('confirma desde el panel con envío y muestra el total calculado', async () => {
+    const cookie = await login('agent');
+    await db.prepare('UPDATE orders SET subtotal_amount = 200, expires_at = ?')
+      .bind(Date.now() + 60_000).run();
+    const before = await (await get(detailPath, cookie)).text();
+    expect(before).toContain('action="/pedidos/order-1/envio"');
+    expect(before).toContain('name="shippingCost" type="number" min="0" step="1" inputmode="numeric"');
+    const response = await post(detailPath + '/envio', {
+      carrier: 'Inter Rapidísimo', shippingCost: '12000', shippingEtaDays: '3', expectedVersion: '1',
+    }, cookie);
+    expect(response.status).toBe(303);
+    expect(response.headers.get('Location')).toBe(detailPath);
+    expect(await db.prepare(`SELECT status, payment_status, carrier, shipping_cost, shipping_eta_days,
+      subtotal_amount, total_amount, version, expires_at FROM orders`).first()).toEqual({
+      status: 'confirmed', payment_status: 'cod_pending', carrier: 'Inter Rapidísimo',
+      shipping_cost: 12000, shipping_eta_days: 3, subtotal_amount: 200,
+      total_amount: 12200, version: 2, expires_at: null,
+    });
+    expect(await db.prepare('SELECT admin_id, to_status FROM audit_log').first())
+      .toEqual({ admin_id: 'agent', to_status: 'confirmed' });
+    const after = await (await get(detailPath, cookie)).text();
+    expect(after).toContain('Inter Rapidísimo');
+    expect(after).toContain('12.000 COP');
+    expect(after).toContain('12.200 COP');
+    expect(after).toContain('3 días');
+    expect(after).not.toContain('name="shippingCost"');
+  });
+
+  it('conserva el envío enviado con versión vieja sin sobrescribir ni auditar', async () => {
+    const cookie = await login();
+    await db.prepare('UPDATE orders SET version = 2').run();
+    const draft = { carrier: 'Otra transportadora', shippingCost: '0', shippingEtaDays: '0', expectedVersion: '1' };
+    const conflict = await post(detailPath + '/envio', draft, cookie);
+    expect(conflict.status).toBe(409);
+    const html = await conflict.text();
+    expect(html).toContain('Otro agente lo modificó');
+    for (const [key, value] of Object.entries(draft)) {
+      expect(html).toMatch(new RegExp('name="' + key + '"[^>]*value="' + value + '"'));
+    }
+    expect(await db.prepare('SELECT status, version, shipping_cost, total_amount FROM orders').first())
+      .toEqual({ status: 'pending_confirmation', version: 2, shipping_cost: null, total_amount: null });
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM audit_log').first('n')).toBe(0);
+
+    const accepted = await post(detailPath + '/envio', { ...draft, expectedVersion: '2' }, cookie);
+    expect(accepted.status).toBe(303);
+    const stale = await post(detailPath + '/envio', draft, cookie);
+    expect(stale.status).toBe(409);
+    const staleHtml = await stale.text();
+    expect(staleHtml).toContain('Transportadora enviada: Otra transportadora');
+    expect(staleHtml).not.toContain('name="shippingCost" type="number"');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM audit_log').first('n')).toBe(1);
+  });
+
+  it('valida el envío del panel y rechaza peticiones sin sesión o de otro origen', async () => {
+    const cookie = await login();
+    const valid = { carrier: 'Transportadora', shippingCost: '0', shippingEtaDays: '0', expectedVersion: '1' };
+    expect((await post(detailPath + '/envio', valid)).status).toBe(303);
+    const foreign = await app.request(origin + detailPath + '/envio', {
+      method: 'POST', headers: { Cookie: cookie, Origin: 'https://otro.example' },
+      body: new URLSearchParams(valid),
+    }, testBindings);
+    expect(foreign.status).toBe(403);
+    for (const invalid of [
+      { carrier: '' }, { carrier: 'x'.repeat(101) }, { shippingCost: '-1' },
+      { shippingCost: '1.5' }, { shippingCost: '' }, { shippingEtaDays: '-1' },
+      { shippingEtaDays: '1.5' }, { expectedVersion: '0' }, { expectedVersion: '' },
+    ]) {
+      expect((await post(detailPath + '/envio', { ...valid, ...invalid }, cookie)).status).toBe(400);
+    }
+    expect(await db.prepare('SELECT version FROM orders').first('version')).toBe(1);
+  });
+
   it('muestra las acciones de pago por rol y rechaza una versión obsoleta', async () => {
     const owner = await login();
     const agent = await login('agent');

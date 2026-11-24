@@ -83,8 +83,12 @@ export function transitionOrder(
 
 export function confirmOrderShipping(
   env: AppEnv['Bindings'], number: number, adminId: string, shipping: ShippingQuote,
+  expectedVersion: number,
 ) {
-  return applyOrderTransition(env, number, 'confirmed', adminId, undefined, shipping);
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new HttpError(400, 'invalid_version', 'Se requiere una versión válida del pedido');
+  }
+  return applyOrderTransition(env, number, 'confirmed', adminId, expectedVersion, shipping);
 }
 
 function paymentChanged(
@@ -248,7 +252,9 @@ export async function findPanelOrder(database: D1Database, id: string) {
   const db = drizzle(database);
   const [[order], items, events, audit] = await db.batch([
     db.select({
-      ...panelFields, version: orders.version, shipCity: orders.shipCity, anonymizedAt: orders.anonymizedAt,
+      ...panelFields, carrier: orders.carrier, shippingCost: orders.shippingCost,
+      shippingEtaDays: orders.shippingEtaDays, version: orders.version,
+      shipCity: orders.shipCity, anonymizedAt: orders.anonymizedAt,
     }).from(orders).where(eq(orders.id, id)).limit(1),
     db.select({
       id: orderItems.id, name: orderItems.productName, presentation: orderItems.presentation,

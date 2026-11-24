@@ -6,6 +6,7 @@ import { env } from 'cloudflare:workers';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../index';
 import type { AppEnv } from '../lib/http';
+import { confirmOrderShipping } from '../lib/orders/service';
 import { hashPassword } from '../lib/passwords';
 import { generateTrackingToken, hashTrackingToken } from '../lib/tokens';
 
@@ -113,7 +114,7 @@ describe('autenticación y transiciones administrativas', () => {
 
   it('exige costo de envío y revierte el total y el estado si falla la auditoría', async () => {
     const { credential } = await login('agent');
-    const quote = { carrier: 'Transportadora', shippingCost: 0, shippingEtaDays: 2 };
+    const quote = { expectedVersion: 1, carrier: 'Transportadora', shippingCost: 0, shippingEtaDays: 2 };
     const fixShipping = (body: unknown, cookie?: string) =>
       jsonRequest('/admin/orders/1/shipping', 'PATCH', body, cookie);
     const shippingState = () => db.prepare(`
@@ -125,6 +126,14 @@ describe('autenticación y transiciones administrativas', () => {
     const pending = await shippingState();
 
     expect((await fixShipping(quote)).status).toBe(401);
+    expect(() => Reflect.apply(confirmOrderShipping, undefined, [testBindings, 1, 'agent', quote]))
+      .toThrowError(expect.objectContaining({ status: 400, code: 'invalid_version' }));
+    const missingVersion = await fixShipping({ carrier: quote.carrier, shippingCost: 0, shippingEtaDays: 2 }, credential);
+    expect(missingVersion.status).toBe(400);
+    expect(await missingVersion.json()).toMatchObject({ error: { code: 'invalid_version' } });
+    const staleVersion = await fixShipping({ ...quote, expectedVersion: 2 }, credential);
+    expect(staleVersion.status).toBe(409);
+    expect(await staleVersion.json()).toMatchObject({ error: { code: 'order_changed' } });
     expect((await fixShipping({ carrier: quote.carrier, shippingEtaDays: 2 }, credential)).status).toBe(400);
     expect((await fixShipping({ ...quote, totalAmount: 1 }, credential)).status).toBe(400);
     await expect(db.prepare('UPDATE orders SET total_amount = 1').run()).rejects.toThrow('shipping_cost required');

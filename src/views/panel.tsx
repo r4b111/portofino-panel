@@ -195,7 +195,8 @@ function ConflictAlert({ url, action, message, hidden }: {
 export function orderDetail(
   { order, items, history }: Awaited<ReturnType<typeof findPanelOrder>>,
   role: 'owner' | 'agent',
-  conflict?: { message: string } & ({ draft: TransitionDraft } | { paymentStatus: 'paid' | 'refunded' }),
+  conflict?: { message: string } & ({ draft: TransitionDraft } | { paymentStatus: 'paid' | 'refunded' }
+    | { shipping: { carrier: string; shippingCost: number; shippingEtaDays: number; expectedVersion: number } }),
 ) {
   const available = allowedTransitions[order.status].filter(
     (status) => status !== 'cancelled' || role === 'owner',
@@ -203,6 +204,8 @@ export function orderDetail(
   const url = detailUrl(order.id);
   const stateConflict = conflict && 'draft' in conflict ? conflict : undefined;
   const paymentConflict = conflict && 'paymentStatus' in conflict ? conflict : undefined;
+  const shippingConflict = conflict && 'shipping' in conflict ? conflict : undefined;
+  const pending = order.status === 'pending_confirmation';
   const canMarkPaid = order.paymentStatus === 'unpaid' || order.paymentStatus === 'cod_pending';
   const canRefund = order.paymentStatus === 'paid' || order.paymentStatus === 'cod_collected';
   const paymentAction = paymentConflict?.paymentStatus
@@ -230,19 +233,40 @@ export function orderDetail(
         </>}
       </form>}
       <p>Subtotal <strong>{amount(order.subtotalAmount, order.currency)}</strong></p>
+      {order.carrier !== null && <p>Transportadora: <strong>{order.carrier}</strong></p>}
+      {order.shippingCost !== null && <p>Envío <strong>{amount(order.shippingCost, order.currency)}</strong></p>}
+      {order.shippingEtaDays !== null && <p>Plazo estimado: <strong>{order.shippingEtaDays} días</strong></p>}
       <p>Total <strong>{amount(order.totalAmount, order.currency)}</strong></p>
     </section>
     <section class="card" aria-labelledby="estado-heading">
       <h2 id="estado-heading">Cambiar estado</h2>
+      {shippingConflict && <>
+        <ConflictAlert url={url} action="Confirmar pedido con envío" message={shippingConflict.message} />
+        {!pending && <div>
+          <p>Transportadora enviada: {shippingConflict.shipping.carrier}</p>
+          <p>Costo enviado: {amount(shippingConflict.shipping.shippingCost, order.currency)}</p>
+          <p>Plazo enviado: {shippingConflict.shipping.shippingEtaDays} días</p>
+        </div>}
+      </>}
+      {pending && !stateConflict && <form class="stack" action={url + '/envio'} method="post">
+        <input type="hidden" name="expectedVersion" value={shippingConflict?.shipping.expectedVersion ?? order.version} />
+        <label>Transportadora<input name="carrier" maxlength={100} required
+          value={shippingConflict?.shipping.carrier ?? ''} /></label>
+        <label>Costo de envío<input name="shippingCost" type="number" min="0" step="1" inputmode="numeric" required
+          value={shippingConflict?.shipping.shippingCost ?? ''} /></label>
+        <label>Plazo en días<input name="shippingEtaDays" type="number" min="0" step="1" inputmode="numeric" required
+          value={shippingConflict?.shipping.shippingEtaDays ?? ''} /></label>
+        <button type="submit" disabled={Boolean(shippingConflict)}>Confirmar pedido</button>
+      </form>}
       {stateConflict && <ConflictAlert url={url} action={actions[stateConflict.draft.status]} message={stateConflict.message} />}
-      {stateConflict || available.length ? <form class="row" action={url} method="post">
+      {stateConflict || available.some((status) => status !== 'confirmed') ? <form class="row" action={url} method="post">
         <input type="hidden" name="expectedVersion" value={stateConflict?.draft.expectedVersion ?? order.version} />
         {stateConflict
           ? <><input type="hidden" name="status" value={stateConflict.draft.status} />
             <button type="submit" disabled>{actions[stateConflict.draft.status]}</button></>
-          : available.map((status) => <button type="submit" name="status" value={status}
+          : available.filter((status) => status !== 'confirmed').map((status) => <button type="submit" name="status" value={status}
             class={status === 'cancelled' ? 'danger' : undefined}>{actions[status]}</button>)}
-      </form> : <p>No hay acciones disponibles para este estado.</p>}
+      </form> : !pending && <p>No hay acciones disponibles para este estado.</p>}
     </section>
     <section class="card scroll"><h2>Ítems</h2>
       {items.length ? <table>

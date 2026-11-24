@@ -20,7 +20,7 @@ npm run dev
 - `GET /orders/tracking` recibe el token en `X-Tracking-Token` y devuelve estado y datos de envío sin información personal.
 - `GET /admin/orders/:number` consulta el estado y los importes del pedido con una sesión administrativa.
 
-Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **58 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
+Ejecuta `npm test` en el pool de Cloudflare Workers. La suite completa debe reportar **61 pruebas**. Para ejecutar solo las suites de cifrado y tokens, usa `npm test -- src/lib/crypto.test.ts src/lib/tokens.test.ts`.
 
 ## Criptografía
 
@@ -101,7 +101,9 @@ Sustituye el dominio de ejemplo. Si la tienda usa CSP, permite el origen del Wor
 
 ## Confirmar envío
 
-Un agente autenticado puede enviar `PATCH /admin/orders/:number/shipping` con `{ "carrier": "Inter Rapidísimo", "shippingCost": 12000, "shippingEtaDays": 3 }`. El costo debe expresarse en unidades enteras de la moneda del pedido. Se admite costo cero para envío gratis. El pedido debe estar pendiente de confirmación.
+Un agente autenticado puede enviar `PATCH /admin/orders/:number/shipping` con `{ "carrier": "Inter Rapidísimo", "shippingCost": 12000, "shippingEtaDays": 3, "expectedVersion": 1 }`. El costo debe expresarse en unidades enteras de la moneda del pedido. Se admite costo cero para envío gratis. El pedido debe estar pendiente de confirmación.
+
+En `/pedidos/:id`, los pedidos pendientes muestran un formulario con transportadora (1–100 caracteres), costo de envío y plazo en días (enteros no negativos). Se envía a `POST /pedidos/:id/envio` con la versión vigente. El detalle muestra la transportadora, el costo y el plazo guardados. Una versión ausente o inválida se rechaza con 400; una versión obsoleta devuelve 409 sin escribir cambios y conserva los valores enviados para su consulta.
 
 El servidor suma el costo al subtotal guardado y confirma el pedido en el mismo batch que registra el cambio en auditoría. El widget muestra subtotal, envío, total, transportadora y plazo estimado. Antes de confirmar la cotización, el costo y el total aparecen como «Por confirmar».
 
