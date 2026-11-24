@@ -1,0 +1,185 @@
+
+=== salud ===
+health=200
+
+=== frame-ancestors ===
+content-security-policy: frame-ancestors https://claro-panel-educativo-e41.r4b111.chatgpt.site
+
+=== login ===
+{"role":"owner","expiresAt":1795530501303}
+login=200
+
+=== concurrencia pedido 2 ===
+{"error":{"code":"order_changed","message":"Otro agente lo modificó"}} [409]
+{"error":{"code":"order_changed","message":"Otro agente lo modificó"}} [409]
+
+=== cuenta admin ===
+
+ ⛅️ wrangler 4.92.0 (update available 4.167.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.24ms
+[
+  {
+    "results": [
+      {
+        "email": "jjpossada1156a@gmail.com",
+        "role": "owner",
+        "tiene_totp": 0,
+        "largo": 118
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.241
+      },
+      "duration": 0.241,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 1,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
+
+=== pedidos 1 y 2 ===
+
+ ⛅️ wrangler 4.92.0 (update available 4.167.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.18ms
+[
+  {
+    "results": [
+      {
+        "number": 1,
+        "status": "expired",
+        "payment_status": "unpaid",
+        "version": 2,
+        "expires_at": 1795131185278
+      },
+      {
+        "number": 2,
+        "status": "confirmed",
+        "payment_status": "cod_pending",
+        "version": 2,
+        "expires_at": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1846
+      },
+      "duration": 0.1846,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 4,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
+
+=== catalogo ===
+
+ ⛅️ wrangler 4.92.0 (update available 4.167.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.15ms
+[
+  {
+    "results": [
+      {
+        "product_id": "perfume-1",
+        "unit_amount": 159000
+      },
+      {
+        "product_id": "pf-001",
+        "unit_amount": 189000
+      },
+      {
+        "product_id": "pf-002",
+        "unit_amount": 124000
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1455
+      },
+      "duration": 0.1455,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 3,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
+
+=== pedido para el cron ===
+pedido_cron=4
+
+ ⛅️ wrangler 4.92.0 (update available 4.167.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.14ms
+[
+  {
+    "results": [],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1391
+      },
+      "duration": 0.1391,
+      "changes": 1,
+      "last_row_id": 6,
+      "changed_db": true,
+      "size_after": 159744,
+      "rows_read": 1,
+      "rows_written": 2,
+      "total_attempts": 1
+    }
+  }
+]
+
+=== fin ===
+archivo generado: /tmp/diagnostico.txt
