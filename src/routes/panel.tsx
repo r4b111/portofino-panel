@@ -7,7 +7,7 @@ import { loginAgent, loginCredentials, requireAgent, requireRole } from '../lib/
 import { HttpError } from '../lib/errors';
 import type { AppEnv } from '../lib/http';
 import {
-  findPanelOrder, listPanelOrders, markOrderPaid, panelPageSize, refundOrderPayment, transitionOrder,
+  confirmOrderShipping, findPanelOrder, listPanelOrders, markOrderPaid, panelPageSize, refundOrderPayment, transitionOrder,
 } from '../lib/orders/service';
 import { orderStatuses } from '../lib/orders/state';
 import { loginPage, orderDetail, orderList, panelError } from '../views/panel';
@@ -27,6 +27,13 @@ const transitionForm = z.object({
 });
 const paymentForm = z.object({
   paymentStatus: z.enum(['paid', 'refunded']),
+  expectedVersion: positiveInteger,
+});
+const nonnegativeInteger = z.string().regex(/^[0-9]+$/).transform(Number).refine(Number.isSafeInteger);
+const shippingForm = z.object({
+  carrier: z.string().trim().min(1).max(100),
+  shippingCost: nonnegativeInteger,
+  shippingEtaDays: nonnegativeInteger,
   expectedVersion: positiveInteger,
 });
 const orderId = z.string().min(1).max(128);
@@ -102,6 +109,23 @@ panelRoutes.post('/pedidos/:id', requireAgent, sameOriginForm, async (context, n
     if (!(error instanceof HttpError) || error.status !== 409) throw error;
     const detail = await findPanelOrder(context.env.DB, id.data);
     return context.html(orderDetail(detail, agent.role, { draft, message: error.message }), 409);
+  }
+  return context.redirect('/pedidos/' + encodeURIComponent(id.data), 303);
+});
+
+panelRoutes.post('/pedidos/:id/envio', requireAgent, sameOriginForm, async (context) => {
+  const id = orderId.safeParse(context.req.param('id'));
+  if (!id.success) throw new HttpError(404, 'order_not_found', 'Pedido no disponible');
+  const input = shippingForm.safeParse(await formBody(context));
+  if (!input.success) throw new HttpError(400, 'invalid_shipping_form', 'Revisa la transportadora, el costo, el plazo y la versión');
+  const detail = await findPanelOrder(context.env.DB, id.data);
+  const agent = context.get('agent');
+  try {
+    await confirmOrderShipping(context.env, detail.order.number, agent.id, input.data, input.data.expectedVersion);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 409) throw error;
+    const current = await findPanelOrder(context.env.DB, id.data);
+    return context.html(orderDetail(current, agent.role, { shipping: input.data, message: error.message }), 409);
   }
   return context.redirect('/pedidos/' + encodeURIComponent(id.data), 303);
 });

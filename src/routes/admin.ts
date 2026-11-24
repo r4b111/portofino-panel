@@ -17,6 +17,7 @@ const transition = z.object({
   expectedVersion: z.number().int().safe().positive(),
 });
 const shipping = z.object({
+  expectedVersion: z.number().int().safe().positive(),
   carrier: z.string().trim().min(1).max(100),
   shippingCost: z.number().int().safe().nonnegative(),
   shippingEtaDays: z.number().int().safe().nonnegative(),
@@ -65,9 +66,12 @@ adminRoutes.patch('/orders/:number/status', requireAgent, async (context, next) 
 adminRoutes.patch('/orders/:number/shipping', requireAgent, async (context) => {
   const number = orderNumber.safeParse(context.req.param('number'));
   if (!number.success) throw new HttpError(400, 'invalid_number', 'Número de pedido inválido');
-  const input = shipping.safeParse(await readJson(context));
+  const body = await readJson(context);
+  const version = z.object({ expectedVersion: z.number().int().safe().positive() }).safeParse(body);
+  if (!version.success) throw new HttpError(400, 'invalid_version', 'Se requiere una versión válida del pedido');
+  const input = shipping.safeParse(body);
   if (!input.success) throw new HttpError(400, 'invalid_shipping', 'Revisa la transportadora, el costo y el plazo');
-  const order = await confirmOrderShipping(context.env, number.data, context.get('agent').id, input.data);
+  const order = await confirmOrderShipping(context.env, number.data, context.get('agent').id, input.data, input.data.expectedVersion);
   return context.json({ order });
 });
 
