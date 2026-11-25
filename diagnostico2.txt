@@ -1,0 +1,161 @@
+
+=== carrera ===
+pedido=6
+{"error":{"code":"unauthorized","message":"Inicia sesión para continuar"}}{"error":{"code":"unauthorized","message":"Inicia sesión para continuar"}} [401]
+ [401]
+
+=== retencion ===
+
+ ⛅️ wrangler 4.92.0
+───────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.25ms
+[
+  {
+    "results": [
+      {
+        "number": 1,
+        "status": "expired",
+        "buyer_name": null,
+        "anonymized_at": 1795132851616,
+        "expires_at": 1795131185278
+      },
+      {
+        "number": 2,
+        "status": "confirmed",
+        "buyer_name": "Prueba Interna",
+        "anonymized_at": null,
+        "expires_at": null
+      },
+      {
+        "number": 3,
+        "status": "pending_confirmation",
+        "buyer_name": "Retencion Prueba",
+        "anonymized_at": null,
+        "expires_at": 1795760048364
+      },
+      {
+        "number": 4,
+        "status": "expired",
+        "buyer_name": null,
+        "anonymized_at": 1795503651616,
+        "expires_at": 1795501647111
+      },
+      {
+        "number": 5,
+        "status": "confirmed",
+        "buyer_name": "Carrera",
+        "anonymized_at": null,
+        "expires_at": null
+      },
+      {
+        "number": 6,
+        "status": "pending_confirmation",
+        "buyer_name": "Carrera",
+        "anonymized_at": null,
+        "expires_at": 1795883435430
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2526
+      },
+      "duration": 0.2526,
+      "changes": 0,
+      "last_row_id": 10,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 6,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
+
+ ⛅️ wrangler 4.92.0 (update available 4.168.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.29ms
+[
+  {
+    "results": [
+      {
+        "number": 1,
+        "type": "anonymized",
+        "actor_type": "system"
+      },
+      {
+        "number": 4,
+        "type": "anonymized",
+        "actor_type": "system"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.288
+      },
+      "duration": 0.288,
+      "changes": 0,
+      "last_row_id": 10,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 12,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
+
+=== totp ===
+
+ ⛅️ wrangler 4.92.0 (update available 4.168.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database portofino (f05fbc67-1665-4f11-8fa6-abbdbd33949d):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 0.25ms
+[
+  {
+    "results": [
+      {
+        "email": "jjpossada1156a@gmail.com",
+        "tiene_totp": 1
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "EEUR",
+      "served_by_colo": "FRA",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.2526
+      },
+      "duration": 0.2526,
+      "changes": 0,
+      "last_row_id": 10,
+      "changed_db": false,
+      "size_after": 159744,
+      "rows_read": 1,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
